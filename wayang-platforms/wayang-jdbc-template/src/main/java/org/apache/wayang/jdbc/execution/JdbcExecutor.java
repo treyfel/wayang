@@ -17,7 +17,6 @@ package org.apache.wayang.jdbc.execution;
  * limitations under the License.
  */
 
-import org.apache.wayang.basic.channels.FileChannel;
 import org.apache.wayang.basic.data.Tuple2;
 import org.apache.wayang.basic.operators.SpatialFilterOperator;
 import org.apache.wayang.basic.operators.SpatialJoinOperator;
@@ -33,8 +32,6 @@ import org.apache.wayang.core.plan.executionplan.ExecutionTask;
 import org.apache.wayang.core.platform.ExecutionState;
 import org.apache.wayang.core.platform.ExecutorTemplate;
 import org.apache.wayang.core.platform.Platform;
-import org.apache.wayang.core.util.fs.FileSystem;
-import org.apache.wayang.core.util.fs.FileSystems;
 import org.apache.wayang.jdbc.channels.SqlQueryChannel;
 import org.apache.wayang.jdbc.compiler.FunctionCompiler;
 
@@ -49,9 +46,6 @@ import org.apache.wayang.jdbc.platform.JdbcPlatformTemplate;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.io.IOException;
-import java.io.OutputStreamWriter;
-import java.io.UncheckedIOException;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -60,40 +54,13 @@ import java.util.Collection;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-import org.apache.wayang.basic.data.Tuple2;
-import org.apache.wayang.basic.operators.FilterOperator;
-import org.apache.wayang.basic.operators.JoinOperator;
-import org.apache.wayang.basic.operators.SpatialFilterOperator;
-import org.apache.wayang.basic.operators.SpatialJoinOperator;
-import org.apache.wayang.basic.operators.TableSource;
-import org.apache.wayang.core.api.Job;
-import org.apache.wayang.core.api.exception.WayangException;
-import org.apache.wayang.core.optimizer.OptimizationContext;
-import org.apache.wayang.core.plan.executionplan.Channel;
-import org.apache.wayang.core.plan.executionplan.ExecutionStage;
-import org.apache.wayang.core.plan.executionplan.ExecutionTask;
 import org.apache.wayang.core.function.TransformationDescriptor;
 import org.apache.wayang.core.plan.wayangplan.ExecutionOperator;
 import org.apache.wayang.core.util.Tuple;
-import org.apache.wayang.core.platform.ExecutionState;
 import org.apache.wayang.core.platform.Executor;
-import org.apache.wayang.core.platform.ExecutorTemplate;
-import org.apache.wayang.core.platform.Platform;
-import org.apache.wayang.core.util.WayangCollections;
-import org.apache.wayang.jdbc.channels.SqlQueryChannel;
-import org.apache.wayang.jdbc.compiler.FunctionCompiler;
-import org.apache.wayang.jdbc.operators.JdbcExecutionOperator;
-import org.apache.wayang.jdbc.operators.JdbcFilterOperator;
 import org.apache.wayang.jdbc.operators.JdbcGlobalReduceOperator;
-import org.apache.wayang.jdbc.operators.JdbcJoinOperator;
-import org.apache.wayang.jdbc.operators.JdbcProjectionOperator;
 import org.apache.wayang.jdbc.operators.JdbcReduceByOperator;
 import org.apache.wayang.jdbc.operators.JdbcSortOperator;
-import org.apache.wayang.jdbc.operators.JdbcTableSinkOperator;
-import org.apache.wayang.jdbc.operators.JdbcTableSource;
-import org.apache.wayang.jdbc.platform.JdbcPlatformTemplate;
 
 /**
  * {@link Executor} implementation for the {@link JdbcPlatformTemplate}.

@@ -37,9 +37,7 @@ import org.apache.wayang.spatial.operators.postgres.PostgresSpatialJoinOperator;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
-import org.locationtech.jts.geom.GeometryFactory;
 
 import java.sql.DriverManager;
 import java.util.ArrayList;
