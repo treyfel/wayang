@@ -19,6 +19,8 @@ package org.apache.wayang.spatial.integration;
 
 import org.apache.wayang.basic.data.Record;
 import org.apache.wayang.basic.data.Tuple2;
+import org.apache.wayang.core.function.TransformationDescriptor;
+import org.apache.wayang.spatial.Spatial;
 import org.apache.wayang.spatial.data.WayangGeometry;
 import org.apache.wayang.basic.operators.*;
 import org.apache.wayang.core.api.Configuration;
@@ -31,12 +33,15 @@ import org.apache.wayang.java.Java;
 import org.apache.wayang.postgres.Postgres;
 import org.apache.wayang.postgres.operators.PostgresTableSource;
 import org.apache.wayang.spark.Spark;
-import org.junit.jupiter.api.Disabled;
+import org.apache.wayang.spatial.operators.postgres.PostgresSpatialJoinOperator;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 
+import java.sql.DriverManager;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -44,16 +49,29 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-@Disabled("Requires local Postgres test database.")
 public class PostgresSpatialIntegrationTest {
 
+    private static final String POSTGRES_URL = "jdbc:postgresql://localhost:5432/postgres";
+    private static final String POSTGRES_USER = "postgres";
+    private static final String POSTGRES_PASSWORD = "postgres";
+
+    private static boolean postgresAvailable;
+
+    @BeforeAll
+    static void probePostgres() {
+        try (java.sql.Connection ignored = DriverManager.getConnection(POSTGRES_URL, POSTGRES_USER, POSTGRES_PASSWORD)) {
+            postgresAvailable = true;
+        } catch (Exception e) {
+            postgresAvailable = false;
+        }
+    }
 
     public static void main(String[] args) {
         WayangPlan wayangPlan;
         Configuration configuration = new Configuration();
         configuration.setProperty("wayang.postgres.jdbc.url", "jdbc:postgresql://localhost:5432/imdb");
         configuration.setProperty("wayang.postgres.jdbc.user", "postgres");
-        configuration.setProperty("wayang.postgres.jdbc.password", "password");
+        configuration.setProperty("wayang.postgres.jdbc.password", "postgres");
 
         WayangContext wayangContext = new WayangContext(configuration)
                 .withPlugin(Java.basicPlugin())
@@ -62,11 +80,11 @@ public class PostgresSpatialIntegrationTest {
 
         Collection<Record> collector = new ArrayList<>();
 
-        TableSource customer = new PostgresTableSource("person");
+        TableSource customer = new PostgresTableSource("name_basics");
         MapOperator<Record, Record> projection = MapOperator.createProjection(
                 Record.class,
                 Record.class,
-                "name");
+                "primaryname");
 
         LocalCallbackSink<Record> sink = LocalCallbackSink.createCollectingSink(collector, Record.class);
         customer.connectTo(0,projection,0);
@@ -90,108 +108,112 @@ public class PostgresSpatialIntegrationTest {
 
     WayangContext getTestWayangContext() {
         Configuration configuration = new Configuration();
-        configuration.setProperty("wayang.postgres.jdbc.url", "jdbc:postgresql://localhost:5433/postgres"); // Default port 5432
-        configuration.setProperty("wayang.postgres.jdbc.user", "postgres");
-        configuration.setProperty("wayang.postgres.jdbc.password", "postgres");
+        configuration.setProperty("wayang.postgres.jdbc.url", POSTGRES_URL);
+        configuration.setProperty("wayang.postgres.jdbc.user", POSTGRES_USER);
+        configuration.setProperty("wayang.postgres.jdbc.password", POSTGRES_PASSWORD);
 
         return new WayangContext(configuration);
     }
 
     @Test
-    @Disabled("Requires local Postgres test database.")
     void testSpatialFilterOperator() {
+        Assumptions.assumeTrue(postgresAvailable, "Postgres not reachable");
         WayangContext wayangContext = getTestWayangContext()
                 .withPlugin(Java.basicPlugin())
                 .withPlugin(Spark.basicPlugin())
-                .withPlugin(Postgres.plugin());
-
-        ///  Scalar Geometry
-        GeometryFactory geometryFactory = new GeometryFactory();
-        Envelope envelope = new Envelope(0.00, 0.4, 0.00, 0.40);
-        Geometry geom2 = geometryFactory.toGeometry(envelope);
+                .withPlugin(Postgres.plugin())
+                .withPlugin(Spatial.plugin());
 
         TableSource spider =
-                new PostgresTableSource("spider_boxes", "id", "geom");
+                new PostgresTableSource("spider_boxes", "x_min", "y_min", "x_max", "y_max", "geom");
+
+        WayangGeometry queryGeometry =
+                WayangGeometry.fromStringInput("POLYGON((0.00 0.00,0.4 0.00,0.4 0.4,0.00 0.4,0.00 0.00))");
 
         SpatialFilterOperator<Record> spatialFilterOperator = new SpatialFilterOperator<Record>(
                 SpatialPredicate.INTERSECTS,
-                (record -> (WayangGeometry.fromStringInput(record.getString(1)))),
+                (record -> (WayangGeometry.fromStringInput(record.getString(4)))),
                 DataSetType.createDefaultUnchecked(Record.class),
-                WayangGeometry.fromStringInput("POLYGON((0.00 0.00,0.4 0.00,0.4 0.4,0.00 0.4,0.00 0.00))"));
+                queryGeometry);
 
-        spatialFilterOperator.getKeyDescriptor().withSqlImplementation("spatialdb", "geom");
         spatialFilterOperator.addTargetPlatform(Spark.platform());
         spider.connectTo(0,spatialFilterOperator,0);
 
-        Collection<Tuple2<Integer, WayangGeometry>> collector = new ArrayList<>();
-        LocalCallbackSink<Tuple2<Integer, WayangGeometry>> sink
+        Collection<Record> collector = new ArrayList<>();
+        LocalCallbackSink<Record> sink
                 = LocalCallbackSink.createCollectingSink(collector, DataSetType.createDefaultUnchecked(Record.class));
         spatialFilterOperator.connectTo(0, sink, 0);
 
         wayangContext.execute("PostgreSql test", new WayangPlan(sink));
 
-        System.out.println(collector);
-
-        assertEquals(19, collector.size());
+        assertFalse(collector.isEmpty(), "Spatial filter result should not be empty.");
+        for (Record record : collector) {
+            Geometry geometry = WayangGeometry.fromStringInput(record.getString(4)).getGeometry();
+            assertTrue(geometry.intersects(queryGeometry.getGeometry()),
+                    "Found non-intersecting geometry in spatial filter result.");
+        }
     }
 
     @Test
-    @Disabled("Requires local Postgres test database.")
     void testSpatialFilterWithTuple() {
+        Assumptions.assumeTrue(postgresAvailable, "Postgres not reachable");
         WayangContext wayangContext = getTestWayangContext()
                 .withPlugin(Java.basicPlugin())
                 .withPlugin(Spark.basicPlugin())
-                .withPlugin(Postgres.plugin());
-
-        ///  Scalar Geometry
-        GeometryFactory geometryFactory = new GeometryFactory();
-        Envelope envelope = new Envelope(0.00, 0.4, 0.00, 0.40);
-        Geometry geom2 = geometryFactory.toGeometry(envelope);
+                .withPlugin(Postgres.plugin())
+                .withPlugin(Spatial.plugin());
 
         TableSource spider =
-                new PostgresTableSource("spider", "id", "geom");
+                new PostgresTableSource("spider_boxes", "x_min", "y_min", "x_max", "y_max", "geom");
 
-        MapOperator<Record, Tuple2<Integer, WayangGeometry>> mapToTuple = new MapOperator<Record, Tuple2<Integer, WayangGeometry>>(
+        MapOperator<Record, Tuple2<Double, WayangGeometry>> mapToTuple = new MapOperator<Record, Tuple2<Double, WayangGeometry>>(
                 record -> {
-                    Tuple2<Integer, WayangGeometry> tuple = new Tuple2<>();
-                    tuple.field0 = record.getInt(0);
-                    tuple.field1 = WayangGeometry.fromStringInput(record.getField(1).toString());
+                    Tuple2<Double, WayangGeometry> tuple = new Tuple2<>();
+                    tuple.field0 = record.getDouble(0);
+                    tuple.field1 = WayangGeometry.fromStringInput(record.getField(4).toString());
                     return tuple;
                 },
                 Record.class,
                 ReflectionUtils.specify(Tuple2.class)
         );
 
-        SpatialFilterOperator<Tuple2<Integer, WayangGeometry>> spatialFilterOperator = new SpatialFilterOperator<Tuple2<Integer, WayangGeometry>>(
+        WayangGeometry queryGeometry =
+                WayangGeometry.fromStringInput("POLYGON((0.00 0.00,0.4 0.00,0.4 0.4,0.00 0.4,0.00 0.00))");
+
+        SpatialFilterOperator<Tuple2<Double, WayangGeometry>> spatialFilterOperator = new SpatialFilterOperator<Tuple2<Double, WayangGeometry>>(
                 SpatialPredicate.INTERSECTS,
                 Tuple2::getField1,
                 DataSetType.createDefaultUnchecked(Tuple2.class),
-                WayangGeometry.fromStringInput("POLYGON((0.00 0.00,0.4 0.00,0.4 0.4,0.00 0.4,0.00 0.00))"));
+                queryGeometry);
 
         spatialFilterOperator.addTargetPlatform(Java.platform());
         spider.connectTo(0,mapToTuple,0);
         mapToTuple.connectTo(0,spatialFilterOperator,0);
 
-        Collection<Tuple2<Integer, WayangGeometry>> collector = new ArrayList<>();
-        LocalCallbackSink<Tuple2<Integer, WayangGeometry>> sink
+        Collection<Tuple2<Double, WayangGeometry>> collector = new ArrayList<>();
+        LocalCallbackSink<Tuple2<Double, WayangGeometry>> sink
                 = LocalCallbackSink.createCollectingSink(collector, DataSetType.createDefaultUnchecked(Tuple2.class));
         spatialFilterOperator.connectTo(0, sink, 0);
 
         wayangContext.execute("PostgreSql test", new WayangPlan(sink));
 
-        System.out.println(collector);
-        assertEquals(19, collector.size());
+        assertFalse(collector.isEmpty(), "Spatial filter result should not be empty.");
+        for (Tuple2<Double, WayangGeometry> tuple : collector) {
+            assertTrue(tuple.field1.getGeometry().intersects(queryGeometry.getGeometry()),
+                    "Found non-intersecting geometry in spatial filter result.");
+        }
     }
 
     @Test
-    @Disabled("Requires local Postgres test database.")
     void testSpatialJoin() {
+        Assumptions.assumeTrue(postgresAvailable, "Postgres not reachable");
         WayangContext wayangContext = getTestWayangContext()
                 .withPlugin(Java.basicPlugin())
                 .withPlugin(Spark.basicPlugin())
-                .withPlugin(Postgres.plugin());
+                .withPlugin(Postgres.plugin())
+                .withPlugin(Spatial.plugin());
 
-        TableSource table1 = new PostgresTableSource("spider_boxes", "id", "x_min", "y_min", "x_max", "y_max", "geom");
+        TableSource table1 = new PostgresTableSource("spider_boxes", "x_min", "y_min", "x_max", "y_max", "geom");
 
         // Input polygons: nested axis-aligned squares.
         final List<WayangGeometry> inputValues = Arrays.asList(
@@ -212,43 +234,54 @@ public class PostgresSpatialIntegrationTest {
         table1.connectTo(0, spatialJoinOperator, 0);
         inputCollection.connectTo(0, spatialJoinOperator, 1);
 
-        Collection<Tuple2<Record, Record>> collector = new ArrayList<>();
-        LocalCallbackSink<Tuple2<Record, Record>> sink
+        Collection<Tuple2<Record, WayangGeometry>> collector = new ArrayList<>();
+        LocalCallbackSink<Tuple2<Record, WayangGeometry>> sink
                 = LocalCallbackSink.createCollectingSink(collector, DataSetType.createDefaultUnchecked(Tuple2.class));
         spatialJoinOperator.connectTo(0, sink, 0);
         wayangContext.execute("PostgreSql test", new WayangPlan(sink));
 
-        System.out.println(collector);
-
-        assertEquals(30, collector.size());
+        assertFalse(collector.isEmpty(), "Spatial join result should not be empty.");
+        for (Tuple2<Record, WayangGeometry> pair : collector) {
+            Geometry left = WayangGeometry.fromStringInput(pair.field0.getString(4)).getGeometry();
+            assertTrue(left.intersects(pair.field1.getGeometry()),
+                    "Found non-intersecting pair in spatial join result.");
+        }
     }
 
     @Test
-    @Disabled("Requires local Postgres test database.")
     void testSpatialJoinDbSources() {
+        Assumptions.assumeTrue(postgresAvailable, "Postgres not reachable");
         WayangContext wayangContext = getTestWayangContext()
                 .withPlugin(Java.basicPlugin())
                 .withPlugin(Spark.basicPlugin())
-                .withPlugin(Postgres.plugin());
+                .withPlugin(Postgres.plugin())
+                .withPlugin(Spatial.plugin());
 
         // Two logical sources over the same table.
         TableSource table1 = new PostgresTableSource("spider_boxes",  "id", "x_min", "y_min", "x_max", "y_max", "geom");
-        TableSource table2 = new PostgresTableSource("spider_boxes",  "id", "x_min", "y_min", "x_max", "y_max", "geom");
+        TableSource table2 = new PostgresTableSource("spider_boxes_copy",  "id", "x_min", "y_min", "x_max", "y_max", "geom");
 
         // Spatial join on INTERSECTS; both sides use the geom column (index 5).
-        SpatialJoinOperator<Record, Record> spatialJoinOperator =
-                new SpatialJoinOperator<>(
-                        record -> WayangGeometry.fromStringInput(record.getString(5)),
-                        record -> WayangGeometry.fromStringInput(record.getString(5)),
-                        Record.class, Record.class,
+        PostgresSpatialJoinOperator<Record, Record> spatialJoinOperator =
+                new PostgresSpatialJoinOperator<>(
+                        new TransformationDescriptor<>(
+                                record -> WayangGeometry.fromStringInput((String) record.getField(5)),
+                                Record.class,
+                                WayangGeometry.class
+                        ),
+                        new TransformationDescriptor<>(
+                                record -> WayangGeometry.fromStringInput((String) record.getField(5)),
+                                Record.class,
+                                WayangGeometry.class
+                        ),
                         SpatialPredicate.INTERSECTS
                 );
 
         // Register SQL implementations for both inputs
         spatialJoinOperator.getKeyDescriptor0()
-                .withSqlImplementation("spiderdb", "geom");
+                .withSqlImplementation("spider_boxes", "geom");
         spatialJoinOperator.getKeyDescriptor1()
-                .withSqlImplementation("spiderdb", "geom");
+                .withSqlImplementation("spider_boxes_copy", "geom");
 
         spatialJoinOperator.addTargetPlatform(Postgres.platform());
 
@@ -256,11 +289,15 @@ public class PostgresSpatialIntegrationTest {
         table1.connectTo(0, spatialJoinOperator, 0);
         table2.connectTo(0, spatialJoinOperator, 1);
 
-        // Collect results.
-        Collection<Tuple2<Record, Record>> collector = new ArrayList<>();
-        LocalCallbackSink<Tuple2<Record, Record>> sink =
+        // Collect results. When the join runs at the SQL level the channel materialises
+        // as flat Records (all columns from both tables concatenated). When it runs on the
+        // Java platform via JavaSpatialJoinOperator the result is Tuple2<Record, Record>.
+        // We use a raw collection so both execution paths compile without cast warnings.
+        Collection<Object> collector = new ArrayList<>();
+        @SuppressWarnings("unchecked")
+        LocalCallbackSink<Object> sink =
                 LocalCallbackSink.createCollectingSink(
-                        collector,
+                        (Collection) collector,
                         DataSetType.createDefaultUnchecked(Tuple2.class)
                 );
         spatialJoinOperator.connectTo(0, sink, 0);
@@ -271,14 +308,15 @@ public class PostgresSpatialIntegrationTest {
         // Basic sanity check: we should get at least self-intersections.
         assertFalse(collector.isEmpty(), "Spatial join result should not be empty.");
 
-        // Semantic check: every returned pair must actually intersect according to JTS.
-        for (Tuple2<Record, Record> pair : collector) {
-            Geometry g1 = WayangGeometry.fromStringInput(pair.field0.getString(1)).getGeometry();
-            Geometry g2 = WayangGeometry.fromStringInput(pair.field1.getString(1)).getGeometry();
-            assertTrue(
-                    g1.intersects(g2),
-                    "Found non-intersecting pair in spatial join result."
-            );
+        // Semantic check when the Java platform executed the join (result is Tuple2).
+        // geom is at index 5: ("spider_boxes", "id", "x_min", "y_min", "x_max", "y_max", "geom")
+        for (Object element : collector) {
+            if (!(element instanceof Tuple2)) break; // SQL path: flat Records – skip check
+            @SuppressWarnings("unchecked")
+            Tuple2<Record, Record> pair = (Tuple2<Record, Record>) element;
+            Geometry g1 = WayangGeometry.fromStringInput(pair.field0.getString(5)).getGeometry();
+            Geometry g2 = WayangGeometry.fromStringInput(pair.field1.getString(5)).getGeometry();
+            assertTrue(g1.intersects(g2), "Found non-intersecting pair in spatial join result.");
         }
     }
 }

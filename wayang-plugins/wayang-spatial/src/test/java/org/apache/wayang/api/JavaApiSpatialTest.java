@@ -19,6 +19,7 @@
 package org.apache.wayang.api;
 
 import org.apache.wayang.basic.data.Record;
+import org.apache.wayang.basic.data.Tuple2;
 import org.apache.wayang.core.api.Configuration;
 import org.apache.wayang.core.api.WayangContext;
 import org.apache.wayang.core.api.spatial.SpatialPredicate;
@@ -28,12 +29,18 @@ import org.apache.wayang.postgres.operators.PostgresTableSource;
 import org.apache.wayang.spark.Spark;
 import org.apache.wayang.spatial.Spatial;
 import org.apache.wayang.spatial.data.WayangGeometry;
-import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.sql.DriverManager;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -41,6 +48,28 @@ import static org.junit.jupiter.api.Assertions.*;
  * Tests for the fluent spatial API on DataQuantaBuilder.
  */
 public class JavaApiSpatialTest {
+
+    private static final String POSTGRES_URL = "jdbc:postgresql://localhost:5432/postgres";
+    private static final String SPATIALDB_URL = "jdbc:postgresql://localhost:5432/spatialdb";
+    private static final String POSTGRES_USER = "postgres";
+    private static final String POSTGRES_PASSWORD = "postgres";
+
+    private static boolean postgresAvailable;
+    private static boolean spatialDbAvailable;
+
+    @BeforeAll
+    static void probeDatabases() {
+        postgresAvailable = canConnect(POSTGRES_URL);
+        spatialDbAvailable = canConnect(SPATIALDB_URL);
+    }
+
+    private static boolean canConnect(String url) {
+        try (java.sql.Connection ignored = DriverManager.getConnection(url, POSTGRES_USER, POSTGRES_PASSWORD)) {
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
 
     // ==================== Java Platform Tests ====================
 
@@ -449,20 +478,19 @@ public class JavaApiSpatialTest {
     // These tests use PostgreSQL spatial operators with ST_Intersects pushdown.
 
     /**
-     * Helper method to create a PostgreSQL-configured WayangContext.
-     * Connects to spiderdb on localhost:5433.
+     * Helper method to create a PostgreSQL-configured Configuration.
      */
     private Configuration getPostgresConfiguration() {
         Configuration configuration = new Configuration();
-        configuration.setProperty("wayang.postgres.jdbc.url", "jdbc:postgresql://localhost:5433/spiderdb");
-        configuration.setProperty("wayang.postgres.jdbc.user", "postgres");
-        configuration.setProperty("wayang.postgres.jdbc.password", "postgres");
+        configuration.setProperty("wayang.postgres.jdbc.url", POSTGRES_URL);
+        configuration.setProperty("wayang.postgres.jdbc.user", POSTGRES_USER);
+        configuration.setProperty("wayang.postgres.jdbc.password", POSTGRES_PASSWORD);
         return configuration;
     }
 
     @Test
-    @Disabled("Requires local Postgres test database.")
     void testSpatialFilterWithPostgres() {
+        Assumptions.assumeTrue(postgresAvailable, "Postgres not reachable");
         Configuration configuration = getPostgresConfiguration();
 
         WayangContext wayangContext = new WayangContext(configuration)
@@ -499,8 +527,8 @@ public class JavaApiSpatialTest {
     }
 
     @Test
-    @Disabled("Requires local Postgres test database.")
     void testSpatialFilterWithPostgresAndMapping() {
+        Assumptions.assumeTrue(postgresAvailable, "Postgres not reachable");
         Configuration configuration = getPostgresConfiguration();
 
         WayangContext wayangContext = new WayangContext(configuration)
@@ -537,8 +565,8 @@ public class JavaApiSpatialTest {
     }
 
     @Test
-    @Disabled("Requires local Postgres test database.")
     void testSpatialFilterWithPostgresContains() {
+        Assumptions.assumeTrue(postgresAvailable, "Postgres not reachable");
         Configuration configuration = getPostgresConfiguration();
 
         WayangContext wayangContext = new WayangContext(configuration)
@@ -570,5 +598,82 @@ public class JavaApiSpatialTest {
         assertEquals(1, result.size());
         Long count = result.iterator().next();
         System.out.println("PostgreSQL Spatial Filter (ST_Within): " + count + " boxes within the query geometry");
+    }
+
+    // ==================== Cross-Platform Spatial + Non-Spatial Query ====================
+
+    @Test
+    void testAverageWarmRentPerPostalCode() throws Exception {
+        Assumptions.assumeTrue(spatialDbAvailable, "Postgres spatialdb not reachable");
+        Configuration configuration = new Configuration();
+        configuration.setProperty("wayang.postgres.jdbc.url", SPATIALDB_URL);
+        configuration.setProperty("wayang.postgres.jdbc.user", POSTGRES_USER);
+        configuration.setProperty("wayang.postgres.jdbc.password", POSTGRES_PASSWORD);
+
+        WayangContext wayangContext = new WayangContext(configuration)
+                .withPlugin(Java.basicPlugin())
+                .withPlugin(Postgres.plugin())
+                .withPlugin(Spatial.plugin());
+
+        JavaPlanBuilder planBuilder = new JavaPlanBuilder(wayangContext)
+                .withJobName("Average Warm Rent Per Postal Code");
+
+        String plzPath = "file:" + JavaApiSpatialTest.class
+                .getResource("/data/plz_geometries.geojson").getPath();
+
+        String outputPath = "file:/tmp/plz_rent_stats.geojson";
+        Files.deleteIfExists(Paths.get("/tmp/plz_rent_stats.geojson"));
+
+        planBuilder
+                .readTable(new PostgresTableSource("apartments", "warm_price", "size_m2", "poi_lat", "poi_lon"))
+                .asRecords()
+                .projectRecords(new String[]{"warm_price", "size_m2", "poi_lat", "poi_lon"})
+                .spatialJoin(
+                        (Record apt) -> WayangGeometry.fromStringInput(
+                                String.format("POINT(%f %f)", apt.getDouble(3), apt.getDouble(2))),
+                        planBuilder.readGeoJsonFile(plzPath),
+                        (Record plz) -> (WayangGeometry) plz.getField(0),
+                        SpatialPredicate.INTERSECTS
+                )
+                .map((Tuple2<Record, Record> pair) -> {
+                    double warmPrice = ((Number) pair.field0.getField(0)).doubleValue();
+                    double sizeSqm = ((Number) pair.field0.getField(1)).doubleValue();
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> props = (Map<String, Object>) pair.field1.getField(1);
+                    WayangGeometry geom = (WayangGeometry) pair.field1.getField(0);
+                    return new Record(props.get("plz").toString(), warmPrice, warmPrice / sizeSqm, 1.0, geom);
+                })
+                .reduceByKey(
+                        (Record r) -> r.getString(0),
+                        (Record a, Record b) -> new Record(
+                                a.getString(0),
+                                ((Number) a.getField(1)).doubleValue() + ((Number) b.getField(1)).doubleValue(),
+                                ((Number) a.getField(2)).doubleValue() + ((Number) b.getField(2)).doubleValue(),
+                                ((Number) a.getField(3)).doubleValue() + ((Number) b.getField(3)).doubleValue(),
+                                a.getField(4)
+                        )
+                )
+                .map((Record r) -> {
+                    double count = ((Number) r.getField(3)).doubleValue();
+                    double avgPrice = ((Number) r.getField(1)).doubleValue() / count;
+                    double avgPerSqm = ((Number) r.getField(2)).doubleValue() / count;
+                    String plzCode = r.getString(0);
+                    WayangGeometry geom = (WayangGeometry) r.getField(4);
+
+                    Map<String, Object> props = new HashMap<>();
+                    props.put("plz", plzCode);
+                    props.put("avg_warm_price", avgPrice);
+                    props.put("avg_price_per_sqm", avgPerSqm);
+
+                    return new Record(geom, props);
+                })
+                .writeGeoJsonFile(outputPath);
+
+        assertTrue(Files.exists(Paths.get("/tmp/plz_rent_stats.geojson")),
+                "Expected GeoJSON output file to be created");
+        String content = Files.readString(Paths.get("/tmp/plz_rent_stats.geojson"));
+        assertTrue(content.startsWith("{\"type\":\"FeatureCollection\""),
+                "Expected valid GeoJSON FeatureCollection");
+        System.out.println("Written " + content.length() + " bytes to " + outputPath);
     }
 }
