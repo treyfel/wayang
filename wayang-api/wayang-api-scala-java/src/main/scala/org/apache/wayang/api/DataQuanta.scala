@@ -1232,6 +1232,15 @@ class DataQuanta[Out: ClassTag](val operator: ElementaryOperator, outputIndex: I
     this.planBuilder.sinks.clear()
   }
 
+  def writeGeoJsonFileJava(url: String)(implicit ev: Out =:= Record): Unit = {
+    val _ = ev
+    val sink = new GeoJsonFileSink(url)
+    sink.setName(s"Write GeoJSON to $url")
+    this.connectTo(sink, 0)
+    this.planBuilder.sinks += sink
+    this.planBuilder.buildAndExecute()
+    this.planBuilder.sinks.clear()
+  }
 
   private def writeParquetJava(url: String, overwrite: Boolean, preferDataset: Boolean)(implicit ev: Out =:= Record): Unit = {
     val _ = ev
