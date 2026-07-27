@@ -677,6 +677,11 @@ class JsonPlanBuilder() {
       case ContextFromJson.Plugins.Spatial => "org.apache.wayang.spatial.Spatial"
       case other => throw new WayangApiJsonException(s"Unknown plugin: $other")
     }
-    Class.forName(className).getMethod("plugin").invoke(null).asInstanceOf[Plugin]
+    try {
+      Class.forName(className).getMethod("plugin").invoke(null).asInstanceOf[Plugin]
+    } catch {
+      case e: ClassNotFoundException =>
+        throw new WayangApiJsonException(s"Plugin '$pluginName' is not on the classpath ($className).", e)
+    }
   }
 }
