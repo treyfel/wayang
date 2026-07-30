@@ -29,6 +29,8 @@ import org.apache.wayang.core.platform.ChannelDescriptor;
 import org.apache.wayang.core.platform.ChannelInstance;
 import org.apache.wayang.core.platform.lineage.ExecutionLineageNode;
 import org.apache.wayang.core.util.Tuple;
+import org.apache.wayang.core.util.fs.FileSystem;
+import org.apache.wayang.core.util.fs.FileSystems;
 import org.apache.wayang.java.channels.CollectionChannel;
 import org.apache.wayang.java.channels.JavaChannelInstance;
 import org.apache.wayang.java.channels.StreamChannel;
@@ -37,9 +39,9 @@ import org.apache.wayang.java.operators.JavaExecutionOperator;
 import org.apache.wayang.spatial.data.WayangGeometry;
 
 import java.io.BufferedWriter;
-import java.io.FileWriter;
 import java.io.IOException;
-import java.net.URI;
+import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
@@ -47,13 +49,12 @@ import java.util.Map;
 
 /**
  * Java execution operator that writes a stream of {@link Record}s as a GeoJSON FeatureCollection.
- * Each Record must have two fields:
- * <ul>
- *   <li>field[0]: {@link WayangGeometry} – the feature geometry</li>
- *   <li>field[1]: {@link Map}{@code <String, Object>} – the feature properties</li>
- * </ul>
+ * Each Record must hold a {@link WayangGeometry} at {@link #GEOMETRY_FIELD_INDEX} and a
+ * {@link Map}{@code <String, Object>} of properties at {@link #PROPERTIES_FIELD_INDEX}.
  */
 public class JavaGeoJsonFileSink extends GeoJsonFileSink implements JavaExecutionOperator {
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     public JavaGeoJsonFileSink(String outputUrl) {
         super(outputUrl);
@@ -74,30 +75,17 @@ public class JavaGeoJsonFileSink extends GeoJsonFileSink implements JavaExecutio
         assert outputs.length == 0;
 
         JavaChannelInstance input = (JavaChannelInstance) inputs[0];
-        ObjectMapper mapper = new ObjectMapper();
+        final FileSystem fs = FileSystems.requireFileSystem(this.getOutputUrl());
 
-        String path = this.getOutputUrl();
-        if (path.startsWith("file:")) {
-            path = URI.create(path).getPath();
-        }
-
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(path))) {
+        try (BufferedWriter writer = new BufferedWriter(
+                new OutputStreamWriter(fs.create(this.getOutputUrl()), StandardCharsets.UTF_8))) {
             writer.write("{\"type\":\"FeatureCollection\",\"features\":[");
 
             boolean[] first = {true};
             input.<Record>provideStream().forEach(record -> {
                 try {
-                    WayangGeometry geom = (WayangGeometry) record.getField(0);
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> props = (Map<String, Object>) record.getField(1);
-
-                    ObjectNode feature = mapper.createObjectNode();
-                    feature.put("type", "Feature");
-                    feature.set("geometry", mapper.readTree(geom.getGeoJSON()));
-                    feature.set("properties", mapper.valueToTree(props));
-
                     if (!first[0]) writer.write(",");
-                    writer.write(mapper.writeValueAsString(feature));
+                    writer.write(MAPPER.writeValueAsString(toFeature(record)));
                     first[0] = false;
                 } catch (IOException e) {
                     throw new WayangException("Failed to write GeoJSON feature.", e);
@@ -110,6 +98,43 @@ public class JavaGeoJsonFileSink extends GeoJsonFileSink implements JavaExecutio
         }
 
         return ExecutionOperator.modelEagerExecution(inputs, outputs, operatorContext);
+    }
+
+    /**
+     * Converts a {@link Record} into a GeoJSON Feature, rejecting records that do not follow the
+     * geometry/properties shape this sink documents.
+     */
+    private static ObjectNode toFeature(Record record) throws IOException {
+        if (record.size() <= PROPERTIES_FIELD_INDEX) {
+            throw new WayangException(String.format(
+                    "Expected a GeoJSON record with at least %d fields, got %s.",
+                    PROPERTIES_FIELD_INDEX + 1, record));
+        }
+        final Object geometryField = record.getField(GEOMETRY_FIELD_INDEX);
+        final Object propertiesField = record.getField(PROPERTIES_FIELD_INDEX);
+        if (!(geometryField instanceof WayangGeometry)) {
+            throw new WayangException(String.format(
+                    "Expected a %s in field %d of %s, got %s.",
+                    WayangGeometry.class.getSimpleName(), GEOMETRY_FIELD_INDEX, record,
+                    geometryField == null ? "null" : geometryField.getClass().getName()));
+        }
+        if (!(propertiesField instanceof Map)) {
+            throw new WayangException(String.format(
+                    "Expected a %s in field %d of %s, got %s.",
+                    Map.class.getSimpleName(), PROPERTIES_FIELD_INDEX, record,
+                    propertiesField == null ? "null" : propertiesField.getClass().getName()));
+        }
+
+        final ObjectNode feature = MAPPER.createObjectNode();
+        feature.put("type", "Feature");
+        feature.set("geometry", MAPPER.readTree(((WayangGeometry) geometryField).getGeoJSON()));
+        feature.set("properties", MAPPER.valueToTree(propertiesField));
+        return feature;
+    }
+
+    @Override
+    public JavaGeoJsonFileSink copy() {
+        return new JavaGeoJsonFileSink(this.getOutputUrl());
     }
 
     @Override

@@ -1232,7 +1232,16 @@ class DataQuanta[Out: ClassTag](val operator: ElementaryOperator, outputIndex: I
     this.planBuilder.sinks.clear()
   }
 
-  def writeGeoJsonFileJava(url: String)(implicit ev: Out =:= Record): Unit = {
+  /**
+    * Write the data quanta in this instance to a GeoJSON file. Triggers execution.
+    *
+    * Each [[Record]] must hold the feature geometry in field
+    * [[GeoJsonFileSink.GEOMETRY_FIELD_INDEX]] and a `java.util.Map` of feature properties in
+    * field [[GeoJsonFileSink.PROPERTIES_FIELD_INDEX]].
+    *
+    * @param url URL to the GeoJSON file
+    */
+  def writeGeoJsonFile(url: String)(implicit ev: Out =:= Record): Unit = {
     val _ = ev
     val sink = new GeoJsonFileSink(url)
     sink.setName(s"Write GeoJSON to $url")

@@ -24,10 +24,22 @@ import org.apache.wayang.core.types.DataSetType;
 
 /**
  * Logical operator representing a GeoJSON FeatureCollection file sink consuming {@link Record} elements.
- * Each Record must have two fields: field[0] a geometry (serialisable to GeoJSON) and
- * field[1] a {@link java.util.Map} of feature properties.
+ * Each Record must have at least two fields: the feature geometry at
+ * {@link #GEOMETRY_FIELD_INDEX} and a {@link java.util.Map} of feature properties at
+ * {@link #PROPERTIES_FIELD_INDEX}. This is the shape produced by {@link GeoJsonFileSource}, so a
+ * source and a sink round-trip without an intermediate transformation.
  */
 public class GeoJsonFileSink extends UnarySink<Record> {
+
+    /**
+     * Index of the field holding the feature geometry.
+     */
+    public static final int GEOMETRY_FIELD_INDEX = 0;
+
+    /**
+     * Index of the field holding the feature properties.
+     */
+    public static final int PROPERTIES_FIELD_INDEX = 1;
 
     private final String outputUrl;
 

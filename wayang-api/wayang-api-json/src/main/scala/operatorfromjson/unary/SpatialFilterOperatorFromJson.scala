@@ -33,5 +33,12 @@ case class SpatialFilterOperatorFromJson(override val id: Long,
 }
 
 object SpatialFilterOperatorFromJson {
-  case class Data(keyUdf: String, predicate: String, geometryUdf: String, columnName: String = null)
+
+  /**
+    * @param keyUdf     UDF extracting the geometry to test from each data quantum
+    * @param predicate  name of a [[org.apache.wayang.core.api.spatial.SpatialPredicate]]
+    * @param geometry   the reference geometry as WKT, GeoJSON or hex-encoded WKB
+    * @param columnName optional SQL column name enabling database pushdown
+    */
+  case class Data(keyUdf: String, predicate: String, geometry: String, columnName: String = null)
 }

@@ -19,7 +19,7 @@ package org.apache.wayang.api.json.builder
 
 import org.apache.wayang.api.json.operatorfromjson.OperatorFromJson.ExecutionPlatforms
 import org.apache.wayang.api.json.exception.WayangApiJsonException
-import org.apache.wayang.api.json.parserutil.{SerializableExpression, SerializableIterable, SerializableLambda, SerializableLambda2}
+import org.apache.wayang.api.json.parserutil.{SerializableIterable, SerializableLambda, SerializableLambda2}
 import org.apache.wayang.api.json.operatorfromjson.{ComposedOperatorFromJson, ContextFromJson, OperatorFromJson}
 import org.apache.wayang.api.json.operatorfromjson.binary.{CartesianOperatorFromJson, CoGroupOperatorFromJson, IntersectOperatorFromJson, JoinOperatorFromJson, PredictOperatorFromJson, DLTrainingOperatorFromJson, SpatialJoinOperatorFromJson, UnionOperatorFromJson}
 import org.apache.wayang.api.json.operatorfromjson.other.KMeansFromJson
@@ -35,6 +35,7 @@ import org.apache.wayang.core.api.{Configuration, WayangContext}
 import org.apache.wayang.core.function.ExecutionContext
 import org.apache.wayang.core.function.FunctionDescriptor.ExtendedSerializableFunction
 import org.apache.wayang.core.platform.Platform
+import org.apache.wayang.core.util.ReflectionUtils
 import org.apache.wayang.core.api.spatial.{SpatialGeometry, SpatialPredicate}
 import org.apache.wayang.java.Java
 import org.apache.wayang.postgres.Postgres
@@ -240,10 +241,13 @@ class JsonPlanBuilder() {
   }
 
   private def visit(operator: JDBCRemoteInputFromJson, planBuilder: PlanBuilder): DataQuanta[Any] = {
+    val columnNames = Option(operator.data.columnNames).getOrElse(List())
+    val source = planBuilder.readTable(new PostgresTableSource(operator.data.table, columnNames: _*))
+    val table = if (columnNames.nonEmpty) source.projectRecords(columnNames) else source
     if (!ExecutionPlatforms.All.contains(operator.executionPlatform))
-      planBuilder.readTable(new PostgresTableSource(operator.data.table, operator.data.columnNames: _*)).asInstanceOf[DataQuanta[Any]]
+      table.asInstanceOf[DataQuanta[Any]]
     else
-      planBuilder.readTable(new PostgresTableSource(operator.data.table, operator.data.columnNames: _*)).withTargetPlatforms(getExecutionPlatform(operator.executionPlatform)).asInstanceOf[DataQuanta[Any]]
+      table.withTargetPlatforms(getExecutionPlatform(operator.executionPlatform)).asInstanceOf[DataQuanta[Any]]
   }
 
   private def visit(operator: GeoJsonFileInputFromJson, planBuilder: PlanBuilder): DataQuanta[Any] = {
@@ -263,10 +267,21 @@ class JsonPlanBuilder() {
   }
 
   private def visit(operator: GeoJsonFileOutputFromJson, dataQuanta: DataQuanta[Any]): DataQuanta[Any] = {
-    // The sink expects Records of (WayangGeometry, java.util.Map[String, Object]).
-    dataQuanta.asInstanceOf[DataQuanta[Record]].writeGeoJsonFileJava(operator.data.filename)
+    asRecords(dataQuanta).writeGeoJsonFile(operator.data.filename)
     dataQuanta
   }
+
+  /**
+    * Re-tags `dataQuanta` as [[Record]]s. Since every `visit` is typed `DataQuanta[Any]`, the UDF
+    * operators erase their output type to `Object`, which [[GeoJsonFileSink]]'s `Record`-typed
+    * input slot rejects in `Operator.connectTo`. Only inserts an identity map when the upstream
+    * operator does not already produce [[Record]]s.
+    */
+  private def asRecords(dataQuanta: DataQuanta[Any]): DataQuanta[Record] =
+    if (classOf[Record].isAssignableFrom(dataQuanta.output.getType.getDataUnitType.getTypeClass))
+      dataQuanta.asInstanceOf[DataQuanta[Record]]
+    else
+      dataQuanta.map(_.asInstanceOf[Record])
 
   //
   // Unary operators
@@ -405,8 +420,8 @@ class JsonPlanBuilder() {
 
   private def visit(operator: SpatialFilterOperatorFromJson, dataQuanta: DataQuanta[Any]): DataQuanta[Any] = {
     val key = SerializableLambda.createLambda[Any, SpatialGeometry](operator.data.keyUdf)
-    val predicate = SpatialPredicate.valueOf(operator.data.predicate)
-    val geometry = SerializableExpression.create[SpatialGeometry](operator.data.geometryUdf).get
+    val predicate = getSpatialPredicate(operator.data.predicate)
+    val geometry = getSpatialGeometry(operator.data.geometry)
     if (!ExecutionPlatforms.All.contains(operator.executionPlatform))
       dataQuanta.spatialFilter(key, predicate, geometry, operator.data.columnName)
     else
@@ -477,7 +492,7 @@ class JsonPlanBuilder() {
   private def visit(operator: SpatialJoinOperatorFromJson, dataQuanta1: DataQuanta[Any], dataQuanta2: DataQuanta[Any]): DataQuanta[Any] = {
     val leftKey = SerializableLambda.createLambda[Any, SpatialGeometry](operator.data.leftKeyUdf)
     val rightKey = SerializableLambda.createLambda[Any, SpatialGeometry](operator.data.rightKeyUdf)
-    val predicate = SpatialPredicate.valueOf(operator.data.predicate)
+    val predicate = getSpatialPredicate(operator.data.predicate)
     if (!ExecutionPlatforms.All.contains(operator.executionPlatform))
       dataQuanta1.spatialJoin(leftKey, dataQuanta2, rightKey, predicate).asInstanceOf[DataQuanta[Any]]
     else
@@ -671,17 +686,42 @@ class JsonPlanBuilder() {
     }
   }
 
-  // Plugins are resolved reflectively to avoid compile-time dependencies on them.
-  private def getPlugin(pluginName: String): Plugin = {
-    val className = pluginName match {
-      case ContextFromJson.Plugins.Spatial => "org.apache.wayang.spatial.Spatial"
-      case other => throw new WayangApiJsonException(s"Unknown plugin: $other")
-    }
-    try {
-      Class.forName(className).getMethod("plugin").invoke(null).asInstanceOf[Plugin]
-    } catch {
-      case e: ClassNotFoundException =>
-        throw new WayangApiJsonException(s"Plugin '$pluginName' is not on the classpath ($className).", e)
-    }
+  /*
+  * Optional plugins
+  */
+  private val SpatialPackage = "org.apache.wayang.spatial"
+  private def getPlugin(pluginName: String): Plugin = pluginName match {
+    case ContextFromJson.Plugins.Spatial =>
+      requireSpatial(ReflectionUtils.evaluate[Plugin](s"$SpatialPackage.Spatial.plugin()"))
+    case other =>
+      throw new WayangApiJsonException(
+        s"Unknown plugin '$other'. Known plugins: ${ContextFromJson.Plugins.All.mkString(", ")}.")
   }
+
+  /** Builds a reference geometry from its WKT, GeoJSON or hex-encoded WKB literal. */
+  private def getSpatialGeometry(literal: String): SpatialGeometry =
+    requireSpatial(
+      Class.forName(s"$SpatialPackage.data.WayangGeometry")
+        .getMethod("fromStringInput", classOf[String])
+        .invoke(null, literal)
+        .asInstanceOf[SpatialGeometry])
+
+  /** Turns the failure to resolve anything from the spatial plugin into an actionable message. */
+  private def requireSpatial[T](resolve: => T): T =
+    try resolve
+    catch {
+      case e @ (_: ClassNotFoundException | _: NoClassDefFoundError | _: IllegalArgumentException) =>
+        throw new WayangApiJsonException(
+          s"The '${ContextFromJson.Plugins.Spatial}' plugin is not on the classpath. " +
+            "Add wayang-spatial to the classpath to run spatial plans.", e)
+    }
+
+  private def getSpatialPredicate(predicate: String): SpatialPredicate =
+    try SpatialPredicate.valueOf(predicate)
+    catch {
+      case _: IllegalArgumentException =>
+        throw new WayangApiJsonException(
+          s"Unknown spatial predicate '$predicate'. " +
+            s"Known predicates: ${SpatialPredicate.values().mkString(", ")}.")
+    }
 }

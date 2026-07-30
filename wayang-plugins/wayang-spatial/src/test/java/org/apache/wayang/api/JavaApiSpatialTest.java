@@ -618,8 +618,9 @@ public class JavaApiSpatialTest {
         JavaPlanBuilder planBuilder = new JavaPlanBuilder(wayangContext)
                 .withJobName("Average Warm Rent Per Postal Code");
 
-        String plzPath = "file:" + JavaApiSpatialTest.class
-                .getResource("/data/plz_geometries.geojson").getPath();
+        java.net.URL plzResource = JavaApiSpatialTest.class.getResource("/data/plz_geometries.geojson");
+        Assumptions.assumeTrue(plzResource != null, "/data/plz_geometries.geojson fixture not available");
+        String plzPath = "file:" + plzResource.getPath();
 
         String outputPath = "file:/tmp/plz_rent_stats.geojson";
         Files.deleteIfExists(Paths.get("/tmp/plz_rent_stats.geojson"));

@@ -530,6 +530,18 @@ trait DataQuantaBuilder[+This <: DataQuantaBuilder[_, Out], Out] extends Logging
   def forEach(f: Consumer[Out]): Unit = this.dataQuanta().foreachJava(f)
 
   /**
+    * Feed the built [[DataQuanta]] into a [[org.apache.wayang.basic.operators.GeoJsonFileSink]]. This
+    * triggers execution of the constructed [[WayangPlan]]. The built [[DataQuanta]] must consist of
+    * [[Record]]s shaped as described by
+    * [[org.apache.wayang.basic.operators.GeoJsonFileSink GeoJsonFileSink]].
+    *
+    * @param url the URL of the file to be written
+    */
+  def writeGeoJsonFile(url: String): Unit =
+    this.withOutputType(DataSetType.createDefault(classOf[Record]).asInstanceOf[DataSetType[Out]])
+      .dataQuanta().asInstanceOf[DataQuanta[Record]].writeGeoJsonFile(url)
+
+  /**
     * Feed the built [[DataQuanta]] into a [[org.apache.wayang.basic.operators.TextFileSink]]. This triggers
     * execution of the constructed [[WayangPlan]].
     *
@@ -537,10 +549,6 @@ trait DataQuantaBuilder[+This <: DataQuantaBuilder[_, Out], Out] extends Logging
     * @param jobName optional name for the [[WayangPlan]]
     * @return the collected data quanta
     */
-  def writeGeoJsonFile(url: String): Unit =
-    this.withOutputType(DataSetType.createDefault(classOf[Record]).asInstanceOf[DataSetType[Out]])
-      .dataQuanta().asInstanceOf[DataQuanta[Record]].writeGeoJsonFileJava(url)
-
   def writeTextFile(url: String, formatterUdf: SerializableFunction[Out, String], jobName: String): Unit =
     this.writeTextFile(url, formatterUdf, jobName, null)
 
