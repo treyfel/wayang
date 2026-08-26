@@ -17,4 +17,6 @@
  */
 package org.apache.wayang.api.json.exception
 
-class WayangApiJsonException(s: String) extends Exception(s){}
+class WayangApiJsonException(s: String, cause: Throwable) extends Exception(s, cause) {
+  def this(s: String) = this(s, null)
+}

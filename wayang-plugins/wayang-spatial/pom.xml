@@ -73,6 +73,7 @@
             <groupId>org.apache.wayang</groupId>
             <artifactId>wayang-api-scala-java</artifactId>
             <version>${project.version}</version>
+            <scope>test</scope>
         </dependency>
 
         <!-- Scala library -->
@@ -86,8 +87,7 @@
         <dependency>
             <groupId>org.locationtech.jts</groupId>
             <artifactId>jts-core</artifactId>
-            <version>1.20.0</version>
-            <scope>test</scope>
+            <version>${jts.version}</version>
         </dependency>
         <dependency>
             <groupId>org.locationtech.jts.io</groupId>

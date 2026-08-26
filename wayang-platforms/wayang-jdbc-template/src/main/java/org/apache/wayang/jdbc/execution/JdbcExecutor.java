@@ -36,6 +36,7 @@ import org.apache.wayang.basic.operators.SpatialJoinOperator;
 import org.apache.wayang.core.api.Configuration;
 import org.apache.wayang.core.api.Job;
 import org.apache.wayang.core.api.exception.WayangException;
+import org.apache.wayang.core.function.TransformationDescriptor;
 import org.apache.wayang.core.optimizer.OptimizationContext;
 import org.apache.wayang.core.plan.executionplan.Channel;
 import org.apache.wayang.core.plan.executionplan.ExecutionStage;
@@ -47,6 +48,7 @@ import org.apache.wayang.core.platform.ExecutorTemplate;
 import org.apache.wayang.core.platform.PartialExecution;
 import org.apache.wayang.core.platform.Platform;
 import org.apache.wayang.core.platform.lineage.ExecutionLineageNode;
+import org.apache.wayang.core.util.Tuple;
 import org.apache.wayang.jdbc.channels.SqlQueryChannel;
 import org.apache.wayang.jdbc.compiler.FunctionCompiler;
 import org.apache.wayang.jdbc.operators.JdbcExecutionOperator;
@@ -223,17 +225,15 @@ public class JdbcExecutor extends ExecutorTemplate {
         }
 
         for (ExecutionTask task : stage.getAllTasks()) {
-            if (task.getOperator() instanceof JdbcJoinOperator) {
-                final JdbcJoinOperator<?> joinOperator = (JdbcJoinOperator<?>) task.getOperator();
-                final String leftTableName = joinOperator.getKeyDescriptor0().getSqlImplementation().field0;
-                for (Object startTaskObject : startTasks) {
-                    final ExecutionTask startTask = (ExecutionTask) startTaskObject;
-                    if (startTask.getOperator() instanceof JdbcSourceOperator) {
-                        final JdbcSourceOperator sourceOperator = (JdbcSourceOperator) startTask.getOperator();
-                        if (sourceOperator.getSourceName().equals(leftTableName)
-                                || sourceOperator.getSourceName(configuration).equals(leftTableName)) {
-                            return startTask;
-                        }
+            final String leftTableName = selectLeftTableName(task.getOperator());
+            if (leftTableName == null) continue;
+            for (Object startTaskObject : startTasks) {
+                final ExecutionTask startTask = (ExecutionTask) startTaskObject;
+                if (startTask.getOperator() instanceof JdbcSourceOperator) {
+                    final JdbcSourceOperator sourceOperator = (JdbcSourceOperator) startTask.getOperator();
+                    if (sourceOperator.getSourceName().equals(leftTableName)
+                            || sourceOperator.getSourceName(configuration).equals(leftTableName)) {
+                        return startTask;
                     }
                 }
             }
@@ -255,6 +255,23 @@ public class JdbcExecutor extends ExecutorTemplate {
                 );
             }
         }
+    }
+
+    /**
+     * Returns the table name of the given join operator's first key descriptor,
+     * or {@code null} if the operator is not a join or has no SQL implementation.
+     */
+    private static String selectLeftTableName(final ExecutionOperator operator) {
+        final TransformationDescriptor<?, ?> keyDescriptor0;
+        if (operator instanceof final JdbcJoinOperator<?> joinOperator) {
+            keyDescriptor0 = joinOperator.getKeyDescriptor0();
+        } else if (operator instanceof final SpatialJoinOperator<?, ?> spatialJoinOperator) {
+            keyDescriptor0 = spatialJoinOperator.getKeyDescriptor0();
+        } else {
+            return null;
+        }
+        final Tuple<String, String> sqlImplementation = keyDescriptor0.getSqlImplementation();
+        return sqlImplementation == null ? null : sqlImplementation.field0;
     }
 
     /**
