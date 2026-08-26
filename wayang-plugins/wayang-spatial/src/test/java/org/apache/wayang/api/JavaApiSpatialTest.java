@@ -28,12 +28,20 @@ import org.apache.wayang.postgres.operators.PostgresTableSource;
 import org.apache.wayang.spark.Spark;
 import org.apache.wayang.spatial.Spatial;
 import org.apache.wayang.spatial.data.WayangGeometry;
-import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.DriverManager;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -41,6 +49,25 @@ import static org.junit.jupiter.api.Assertions.*;
  * Tests for the fluent spatial API on DataQuantaBuilder.
  */
 public class JavaApiSpatialTest {
+
+    private static final String POSTGRES_URL = "jdbc:postgresql://localhost:5432/postgres";
+    private static final String POSTGRES_USER = "postgres";
+    private static final String POSTGRES_PASSWORD = "postgres";
+
+    private static boolean postgresAvailable;
+
+    @BeforeAll
+    static void probeDatabases() {
+        postgresAvailable = canConnect(POSTGRES_URL);
+    }
+
+    private static boolean canConnect(String url) {
+        try (java.sql.Connection ignored = DriverManager.getConnection(url, POSTGRES_USER, POSTGRES_PASSWORD)) {
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
 
     // ==================== Java Platform Tests ====================
 
@@ -449,20 +476,19 @@ public class JavaApiSpatialTest {
     // These tests use PostgreSQL spatial operators with ST_Intersects pushdown.
 
     /**
-     * Helper method to create a PostgreSQL-configured WayangContext.
-     * Connects to spiderdb on localhost:5433.
+     * Helper method to create a PostgreSQL-configured Configuration.
      */
     private Configuration getPostgresConfiguration() {
         Configuration configuration = new Configuration();
-        configuration.setProperty("wayang.postgres.jdbc.url", "jdbc:postgresql://localhost:5433/spiderdb");
-        configuration.setProperty("wayang.postgres.jdbc.user", "postgres");
-        configuration.setProperty("wayang.postgres.jdbc.password", "postgres");
+        configuration.setProperty("wayang.postgres.jdbc.url", POSTGRES_URL);
+        configuration.setProperty("wayang.postgres.jdbc.user", POSTGRES_USER);
+        configuration.setProperty("wayang.postgres.jdbc.password", POSTGRES_PASSWORD);
         return configuration;
     }
 
     @Test
-    @Disabled("Requires local Postgres test database.")
     void testSpatialFilterWithPostgres() {
+        Assumptions.assumeTrue(postgresAvailable, "Postgres not reachable");
         Configuration configuration = getPostgresConfiguration();
 
         WayangContext wayangContext = new WayangContext(configuration)
@@ -499,8 +525,8 @@ public class JavaApiSpatialTest {
     }
 
     @Test
-    @Disabled("Requires local Postgres test database.")
     void testSpatialFilterWithPostgresAndMapping() {
+        Assumptions.assumeTrue(postgresAvailable, "Postgres not reachable");
         Configuration configuration = getPostgresConfiguration();
 
         WayangContext wayangContext = new WayangContext(configuration)
@@ -537,8 +563,8 @@ public class JavaApiSpatialTest {
     }
 
     @Test
-    @Disabled("Requires local Postgres test database.")
     void testSpatialFilterWithPostgresContains() {
+        Assumptions.assumeTrue(postgresAvailable, "Postgres not reachable");
         Configuration configuration = getPostgresConfiguration();
 
         WayangContext wayangContext = new WayangContext(configuration)
@@ -571,4 +597,65 @@ public class JavaApiSpatialTest {
         Long count = result.iterator().next();
         System.out.println("PostgreSQL Spatial Filter (ST_Within): " + count + " boxes within the query geometry");
     }
+
+    // ==================== GeoJSON Source / Sink ====================
+
+    /**
+     * Writes features through {@code writeGeoJsonFile} and reads them back through
+     * {@code readGeoJsonFile}, asserting that geometries and properties survive the round trip.
+     * Runs entirely on the Java platform, so it needs no database.
+     */
+    @Test
+    void testGeoJsonRoundTrip(@TempDir Path tempDir) throws Exception {
+        WayangContext wayangContext = new WayangContext(new Configuration())
+                .withPlugin(Java.basicPlugin())
+                .withPlugin(Spatial.javaPlugin());
+
+        Path outputFile = tempDir.resolve("features.geojson");
+        String outputUrl = "file:" + outputFile;
+
+        Map<String, Object> pointProperties = new HashMap<>();
+        pointProperties.put("name", "alpha");
+        Map<String, Object> polygonProperties = new HashMap<>();
+        polygonProperties.put("name", "beta");
+
+        List<Record> features = Arrays.asList(
+                new Record(WayangGeometry.fromStringInput("POINT(1 2)"), pointProperties),
+                new Record(
+                        WayangGeometry.fromStringInput("POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"),
+                        polygonProperties)
+        );
+
+        new JavaPlanBuilder(wayangContext)
+                .withJobName("GeoJSON Sink Test")
+                .loadCollection(features)
+                .writeGeoJsonFile(outputUrl);
+
+        assertTrue(Files.exists(outputFile), "Expected the GeoJSON output file to be created.");
+        assertTrue(Files.readString(outputFile).startsWith("{\"type\":\"FeatureCollection\""),
+                "Expected a GeoJSON FeatureCollection.");
+
+        Collection<Record> readBack = new JavaPlanBuilder(wayangContext)
+                .withJobName("GeoJSON Source Test")
+                .readGeoJsonFile(outputUrl)
+                .collect();
+
+        assertEquals(2, readBack.size(), "Expected both features to be read back.");
+
+        // The sink and the source agree on the record shape: geometry in field 0, properties in field 1.
+        List<String> geometryTypes = readBack.stream()
+                .map(record -> ((WayangGeometry) record.getField(0)).getGeometry().getGeometryType())
+                .sorted()
+                .collect(Collectors.toList());
+        assertEquals(Arrays.asList("Point", "Polygon"), geometryTypes,
+                "Expected the geometries to survive the round trip.");
+
+        List<String> names = readBack.stream()
+                .map(record -> ((Map<?, ?>) record.getField(1)).get("name").toString())
+                .sorted()
+                .collect(Collectors.toList());
+        assertEquals(Arrays.asList("alpha", "beta"), names,
+                "Expected the feature properties to survive the round trip.");
+    }
+
 }
