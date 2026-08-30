@@ -23,7 +23,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Set;
+import java.util.List;
 import java.util.stream.Collectors;
 
 import org.apache.logging.log4j.LogManager;
@@ -70,6 +70,20 @@ public class JdbcExecutor extends ExecutorTemplate {
     public static StringBuilder createSqlString(final JdbcExecutor jdbcExecutor, final JdbcTableSource tableOp,
             final Collection<JdbcExecutionOperator> filterTasks, final JdbcProjectionOperator projectionTask, final JdbcGlobalReduceOperator globalReduceTask, final JdbcReduceByOperator reduceByTask, final JdbcSortOperator sortTask, 
             final Collection<JdbcExecutionOperator> joinTasks) {
+        return createSqlString(jdbcExecutor, tableOp, filterTasks, projectionTask, globalReduceTask, reduceByTask,
+                sortTask, joinTasks, null);
+    }
+
+    /**
+     * As above, but for a stage whose inputs each carry their own projection.
+     *
+     * @param joinSelectClause the columns every branch of a join contributes, already
+     *                         qualified by table, or {@code null} when the stage is not a
+     *                         join or no branch projects
+     */
+    public static StringBuilder createSqlString(final JdbcExecutor jdbcExecutor, final JdbcTableSource tableOp,
+            final Collection<JdbcExecutionOperator> filterTasks, final JdbcProjectionOperator projectionTask, final JdbcGlobalReduceOperator globalReduceTask, final JdbcReduceByOperator reduceByTask, final JdbcSortOperator sortTask, 
+            final Collection<JdbcExecutionOperator> joinTasks, final String joinSelectClause) {
         final String tableName = tableOp.createSqlClause(jdbcExecutor.connection, jdbcExecutor.functionCompiler);
         final Collection<String> conditions = filterTasks.stream()
                 .map(op -> op.createSqlClause(jdbcExecutor.connection, jdbcExecutor.functionCompiler))
@@ -89,6 +103,8 @@ public class JdbcExecutor extends ExecutorTemplate {
                     jdbcExecutor.connection,
                     jdbcExecutor.functionCompiler
                 );
+            } else if (joinSelectClause != null) {
+                selectClause = joinSelectClause;
             } else if (projectionTask != null) {
                 selectClause = projectionTask.createSqlClause(
                     jdbcExecutor.connection,
@@ -152,8 +168,8 @@ public class JdbcExecutor extends ExecutorTemplate {
         JdbcReduceByOperator reduceByTask = null;
         JdbcSortOperator sortTask = null;
         final Collection<JdbcExecutionOperator> joinTasks = new ArrayList<>();
-        final Set<ExecutionTask> allTasks = stage.getAllTasks();
-        assert allTasks.size() <= 3;
+        // No cap on the task count: a join stage holds a source and optionally a
+        // projection per branch, plus the join itself.
         ExecutionTask nextTask = JdbcExecutor.findJdbcExecutionOperatorTaskInStage(startTask, stage);
         while (nextTask != null) {
             // Evaluate the nextTask.
@@ -187,9 +203,77 @@ public class JdbcExecutor extends ExecutorTemplate {
         }
 
         // Create the SQL query.
-        final StringBuilder query = createSqlString(jdbcExecutor, tableOp, filterTasks, projectionTask, globalReduceTask, reduceByTask, sortTask, joinTasks);
+        final StringBuilder query = createSqlString(jdbcExecutor, tableOp, filterTasks, projectionTask,
+                globalReduceTask, reduceByTask, sortTask, joinTasks,
+                joinTasks.isEmpty() ? null : composeJoinSelectClause(stage, startTask));
         
         return new Tuple2<>(query.toString(), tipChannelInstance);
+    }
+
+    /**
+     * The {@code SELECT} clause of a join stage: what every input branch projects, each
+     * column qualified by the table it came from.
+     *
+     * A single-table stage can walk forward from its one start task and find its one
+     * projection. A join has a branch per input, and only the left one lies on that walk,
+     * so the right branch's projection would never reach the query and its columns would
+     * silently vanish from the result. Qualifying is not cosmetic either: two joined
+     * tables routinely share a column name (a geometry column, an id), which is ambiguous
+     * unqualified.
+     *
+     * A branch that projects nothing contributes {@code <table>.*}. When no branch
+     * projects at all the clause is {@code null}, leaving the plain {@code *} that a join
+     * without projections has always produced.
+     */
+    private static String composeJoinSelectClause(final ExecutionStage stage, final ExecutionTask leftStartTask) {
+        final List<ExecutionTask> branches = new ArrayList<>();
+        branches.add(leftStartTask);
+        for (final Object startTask : stage.getStartTasks()) {
+            if (startTask != leftStartTask) {
+                branches.add((ExecutionTask) startTask);
+            }
+        }
+
+        final List<String> columns = new ArrayList<>();
+        boolean anyProjection = false;
+        for (final ExecutionTask branch : branches) {
+            if (!(branch.getOperator() instanceof JdbcTableSource)) {
+                // A branch whose columns cannot be named would be dropped from the
+                // result; fall back to selecting everything rather than lose it.
+                return null;
+            }
+            final String table = ((JdbcTableSource) branch.getOperator()).getTableName();
+            final JdbcProjectionOperator projection = findBranchProjection(branch, stage);
+            if (projection == null) {
+                columns.add(table + ".*");
+                continue;
+            }
+            anyProjection = true;
+            for (final String field : projection.getFunctionDescriptor().getFieldNames()) {
+                columns.add(table + "." + field);
+            }
+        }
+        return anyProjection ? String.join(", ", columns) : null;
+    }
+
+    /**
+     * The projection on one input branch of a join, or {@code null} if that branch has
+     * none. Stops at the join itself, so it never crosses into another branch.
+     */
+    private static JdbcProjectionOperator findBranchProjection(final ExecutionTask startTask,
+            final ExecutionStage stage) {
+        ExecutionTask task = JdbcExecutor.findJdbcExecutionOperatorTaskInStage(startTask, stage);
+        while (task != null) {
+            final ExecutionOperator operator = task.getOperator();
+            if (operator instanceof JoinOperator || operator instanceof SpatialJoinOperator) {
+                return null;
+            }
+            if (operator instanceof JdbcProjectionOperator) {
+                return (JdbcProjectionOperator) operator;
+            }
+            task = JdbcExecutor.findJdbcExecutionOperatorTaskInStage(task, stage);
+        }
+        return null;
     }
 
     /**
@@ -293,7 +377,8 @@ public class JdbcExecutor extends ExecutorTemplate {
 
         // Compose the SELECT query
         final StringBuilder selectQuery = createSqlString(jdbcExecutor, tableOp, filterTasks, projectionTask,
-                globalReduceTask, reduceByTask, sortTask, joinTasks);
+                globalReduceTask, reduceByTask, sortTask, joinTasks,
+                joinTasks.isEmpty() ? null : composeJoinSelectClause(stage, startTask));
 
         // Remove trailing semicolon from SELECT
         String selectSql = selectQuery.toString();
