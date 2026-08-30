@@ -493,10 +493,14 @@ class JsonPlanBuilder() {
     val leftKey = SerializableLambda.createLambda[Any, SpatialGeometry](operator.data.leftKeyUdf)
     val rightKey = SerializableLambda.createLambda[Any, SpatialGeometry](operator.data.rightKeyUdf)
     val predicate = getSpatialPredicate(operator.data.predicate)
+    val joined = dataQuanta1.spatialJoin(
+      leftKey, dataQuanta2, rightKey, predicate,
+      operator.data.leftTable, operator.data.leftColumn,
+      operator.data.rightTable, operator.data.rightColumn)
     if (!ExecutionPlatforms.All.contains(operator.executionPlatform))
-      dataQuanta1.spatialJoin(leftKey, dataQuanta2, rightKey, predicate).asInstanceOf[DataQuanta[Any]]
+      joined.asInstanceOf[DataQuanta[Any]]
     else
-      dataQuanta1.spatialJoin(leftKey, dataQuanta2, rightKey, predicate).withTargetPlatforms(getExecutionPlatform(operator.executionPlatform)).asInstanceOf[DataQuanta[Any]]
+      joined.withTargetPlatforms(getExecutionPlatform(operator.executionPlatform)).asInstanceOf[DataQuanta[Any]]
   }
 
   private def visit(operator: PredictOperatorFromJson, dataQuanta1: DataQuanta[Any], dataQuanta2: DataQuanta[Any]): DataQuanta[Any] = {
@@ -669,6 +673,9 @@ class JsonPlanBuilder() {
     executionPlatform match {
       case OperatorFromJson.ExecutionPlatforms.Java => Java.platform()
       case OperatorFromJson.ExecutionPlatforms.Spark => Spark.platform()
+      // Every name in ExecutionPlatforms.All reaches withTargetPlatforms, so one that
+      // resolves to null pins an operator to nothing at all.
+      case OperatorFromJson.ExecutionPlatforms.Postgres => Postgres.platform()
       case _ => null
     }
   }

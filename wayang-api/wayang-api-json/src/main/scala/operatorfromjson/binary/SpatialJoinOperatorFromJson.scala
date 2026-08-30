@@ -33,5 +33,16 @@ case class SpatialJoinOperatorFromJson(override val id: Long,
 }
 
 object SpatialJoinOperatorFromJson {
-  case class Data(leftKeyUdf: String, rightKeyUdf: String, predicate: String)
+  /**
+    * `left*`/`right*` name the SQL column each key reads. Supplying all four is what lets
+    * the Postgres mapping claim the join and push it down as an ST_* clause; without them
+    * the key descriptors carry no SQL implementation and the join can only run on Java.
+    */
+  case class Data(leftKeyUdf: String,
+                  rightKeyUdf: String,
+                  predicate: String,
+                  leftTable: String = null,
+                  leftColumn: String = null,
+                  rightTable: String = null,
+                  rightColumn: String = null)
 }
