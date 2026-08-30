@@ -32,6 +32,7 @@ import org.apache.wayang.core.platform.CrossPlatformExecutor;
 import org.apache.wayang.core.profiling.NoInstrumentationStrategy;
 import org.apache.wayang.jdbc.channels.SqlQueryChannel;
 import org.apache.wayang.jdbc.execution.JdbcExecutor;
+import org.apache.wayang.jdbc.operators.JdbcProjectionOperator;
 import org.apache.wayang.jdbc.operators.JdbcTableSource;
 import org.apache.wayang.jdbc.operators.SqlToStreamOperator;
 import org.apache.wayang.jdbc.platform.JdbcPlatformTemplate;
@@ -43,7 +44,10 @@ import org.junit.jupiter.api.Test;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.mock;
@@ -54,6 +58,22 @@ import static org.mockito.Mockito.when;
  * Verifies that the generated SQL contains the expected spatial JOIN clause.
  */
 class JdbcSpatialJoinOperatorTest {
+
+    /**
+     * Concrete projection for testing against HSQLDB, standing in for the one
+     * {@code jdbcRemoteInput}'s projectRecords builds on each input.
+     */
+    private static class TestJdbcProjectionOperator extends JdbcProjectionOperator {
+
+        TestJdbcProjectionOperator(String... fieldNames) {
+            super(fieldNames);
+        }
+
+        @Override
+        public JdbcPlatformTemplate getPlatform() {
+            return HsqldbPlatform.getInstance();
+        }
+    }
 
     /**
      * Concrete subclass for testing against HSQLDB.
@@ -103,11 +123,30 @@ class JdbcSpatialJoinOperatorTest {
         );
     }
 
+    @Test
+    void testSpatialJoinProjectsBothSidesQualifiedByTable() throws SQLException {
+        String sql = buildSpatialJoinSql(SpatialPredicate.INTERSECTS, true);
+
+        // Both branches contribute. Only the left one lies on the walk from the stage's
+        // start task, so without this the right side's columns vanish from the result.
+        // Qualifying matters too: both tables have a geom column.
+        assertEquals(
+                "SELECT testA.id, testA.geom, testB.geom FROM testA "
+                        + "JOIN testB ON ST_Intersects(testA.geom, testB.geom)",
+                sql
+        );
+    }
+
     /**
      * Sets up a JDBC execution pipeline (two table sources -> spatial join -> SqlToStream)
      * and returns the generated SQL query string.
      */
     private String buildSpatialJoinSql(SpatialPredicate predicateType) throws SQLException {
+        return buildSpatialJoinSql(predicateType, false);
+    }
+
+    private String buildSpatialJoinSql(SpatialPredicate predicateType, boolean withProjections)
+            throws SQLException {
         Configuration configuration = new Configuration();
 
         Job job = mock(Job.class);
@@ -166,13 +205,30 @@ class JdbcSpatialJoinOperatorTest {
         );
 
         ExecutionTask joinTask = new ExecutionTask(joinOp);
-        tableSourceATask.getOutputChannel(0).addConsumer(joinTask, 0);
-        tableSourceBTask.getOutputChannel(0).addConsumer(joinTask, 1);
+        Set<ExecutionTask> allTasks = new LinkedHashSet<>(
+                Arrays.asList(tableSourceATask, tableSourceBTask, joinTask));
+        if (withProjections) {
+            ExecutionTask projectionA =
+                    projectionTask(sqlStage, sqlChannelDescriptor, tableSourceATask, "id", "geom");
+            ExecutionTask projectionB =
+                    projectionTask(sqlStage, sqlChannelDescriptor, tableSourceBTask, "geom");
+            projectionA.getOutputChannel(0).addConsumer(joinTask, 0);
+            projectionB.getOutputChannel(0).addConsumer(joinTask, 1);
+            allTasks.add(projectionA);
+            allTasks.add(projectionB);
+        } else {
+            tableSourceATask.getOutputChannel(0).addConsumer(joinTask, 0);
+            tableSourceBTask.getOutputChannel(0).addConsumer(joinTask, 1);
+        }
+        when(sqlStage.getAllTasks()).thenReturn(allTasks);
         joinTask.setOutputChannel(0,
                 new SqlQueryChannel(sqlChannelDescriptor, joinOp.getOutput(0)));
         joinTask.setStage(sqlStage);
 
-        when(sqlStage.getStartTasks()).thenReturn(Collections.singleton(tableSourceATask));
+        // Both sources start the stage; selectStartTask picks the left one by the join's
+        // own left table name, which is why start tasks are a set rather than a pair.
+        when(sqlStage.getStartTasks())
+                .thenReturn(new LinkedHashSet<>(Arrays.asList(tableSourceATask, tableSourceBTask)));
         when(sqlStage.getTerminalTasks()).thenReturn(Collections.singleton(joinTask));
 
         // Next stage.
@@ -191,5 +247,15 @@ class JdbcSpatialJoinOperatorTest {
                         .getChannelInstance(sqlToStreamTask.getInputChannel(0));
 
         return sqlQueryChannelInstance.getSqlQuery();
+    }
+
+    private ExecutionTask projectionTask(ExecutionStage stage, SqlQueryChannel.Descriptor descriptor,
+                                         ExecutionTask source, String... fieldNames) {
+        ExecutionOperator projection = new TestJdbcProjectionOperator(fieldNames);
+        ExecutionTask task = new ExecutionTask(projection);
+        source.getOutputChannel(0).addConsumer(task, 0);
+        task.setOutputChannel(0, new SqlQueryChannel(descriptor, projection.getOutput(0)));
+        task.setStage(stage);
+        return task;
     }
 }
