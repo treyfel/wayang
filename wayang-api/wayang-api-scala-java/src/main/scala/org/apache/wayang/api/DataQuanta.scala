@@ -684,6 +684,22 @@ class DataQuanta[Out: ClassTag](val operator: ElementaryOperator, outputIndex: I
     spatialJoinJava(toSerializableFunction(thisKeyUdf), that, toSerializableFunction(thatKeyUdf), predicateType)
 
   /**
+    * As above, naming the SQL table and column behind each key so the join can be pushed
+    * into the database. See [[spatialJoinJava]].
+    */
+  def spatialJoin[ThatOut: ClassTag](
+      thisKeyUdf: Out => SpatialGeometry,
+      that: DataQuanta[ThatOut],
+      thatKeyUdf: ThatOut => SpatialGeometry,
+      predicateType: SpatialPredicate,
+      thisTable: String,
+      thisColumn: String,
+      thatTable: String,
+      thatColumn: String): DataQuanta[WayangTuple2[Out, ThatOut]] =
+    spatialJoinJava(toSerializableFunction(thisKeyUdf), that, toSerializableFunction(thatKeyUdf),
+      predicateType, thisTable, thisColumn, thatTable, thatColumn)
+
+  /**
     * Feeds this and a further instance into a [[SpatialJoinOperator]].
     *
     * @param thisKeyUdf    UDF to extract spatial geometry from this instance's elements
@@ -696,13 +712,37 @@ class DataQuanta[Out: ClassTag](val operator: ElementaryOperator, outputIndex: I
       thisKeyUdf: SerializableFunction[Out, _ <: SpatialGeometry],
       that: DataQuanta[ThatOut],
       thatKeyUdf: SerializableFunction[ThatOut, _ <: SpatialGeometry],
-      predicateType: SpatialPredicate): DataQuanta[WayangTuple2[Out, ThatOut]] = {
+      predicateType: SpatialPredicate): DataQuanta[WayangTuple2[Out, ThatOut]] =
+    spatialJoinJava(thisKeyUdf, that, thatKeyUdf, predicateType, null, null, null, null)
+
+  /**
+    * As above, but naming the SQL table and column behind each key so the join can be
+    * pushed into the database. Mirrors [[spatialFilterJava]]'s `columnName`, except a join
+    * needs the table too: [[org.apache.wayang.spatial.operators.jdbc.JdbcSpatialJoinOperator]]
+    * builds `<leftTable>.<leftKey>` against `<rightTable>.<rightKey>`.
+    *
+    * When any of the four is null the descriptors keep no SQL implementation and the
+    * database mapping cannot claim the operator, exactly as before.
+    */
+  def spatialJoinJava[ThatOut: ClassTag](
+      thisKeyUdf: SerializableFunction[Out, _ <: SpatialGeometry],
+      that: DataQuanta[ThatOut],
+      thatKeyUdf: SerializableFunction[ThatOut, _ <: SpatialGeometry],
+      predicateType: SpatialPredicate,
+      thisTable: String,
+      thisColumn: String,
+      thatTable: String,
+      thatColumn: String): DataQuanta[WayangTuple2[Out, ThatOut]] = {
     require(this.planBuilder eq that.planBuilder, s"$this and $that must use the same plan builders.")
     val op = new SpatialJoinOperator(
       new TransformationDescriptor(thisKeyUdf.asInstanceOf[SerializableFunction[Out, SpatialGeometry]], basicDataUnitType[Out], basicDataUnitType[SpatialGeometry]),
       new TransformationDescriptor(thatKeyUdf.asInstanceOf[SerializableFunction[ThatOut, SpatialGeometry]], basicDataUnitType[ThatOut], basicDataUnitType[SpatialGeometry]),
       predicateType
     )
+    if (thisTable != null && thisColumn != null && thatTable != null && thatColumn != null) {
+      op.getKeyDescriptor0.withSqlImplementation(thisTable, thisColumn)
+      op.getKeyDescriptor1.withSqlImplementation(thatTable, thatColumn)
+    }
     this.connectTo(op, 0)
     that.connectTo(op, 1)
     wrap[WayangTuple2[Out, ThatOut]](op)
