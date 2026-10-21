@@ -36,7 +36,6 @@ import org.apache.wayang.basic.operators.SpatialJoinOperator;
 import org.apache.wayang.basic.operators.TableSource;
 import org.apache.wayang.core.api.Job;
 import org.apache.wayang.core.api.exception.WayangException;
-import org.apache.wayang.core.function.TransformationDescriptor;
 import org.apache.wayang.core.optimizer.OptimizationContext;
 import org.apache.wayang.core.plan.executionplan.Channel;
 import org.apache.wayang.core.plan.executionplan.ExecutionStage;
@@ -48,7 +47,6 @@ import org.apache.wayang.core.platform.ExecutorTemplate;
 import org.apache.wayang.core.platform.PartialExecution;
 import org.apache.wayang.core.platform.Platform;
 import org.apache.wayang.core.platform.lineage.ExecutionLineageNode;
-import org.apache.wayang.core.util.Tuple;
 import org.apache.wayang.core.util.WayangCollections;
 import org.apache.wayang.jdbc.channels.SqlQueryChannel;
 import org.apache.wayang.jdbc.compiler.FunctionCompiler;
@@ -154,7 +152,7 @@ public class JdbcExecutor extends ExecutorTemplate {
         final Collection<?> startTasks = stage.getStartTasks();
 
         // Verify that we can handle this instance.
-        final ExecutionTask startTask = JdbcExecutor.selectStartTask(startTasks, stage);
+        final ExecutionTask startTask = JoinBranches.selectStartTask(startTasks, stage);
         assert startTask.getOperator() instanceof TableSource
                 : "Invalid JDBC stage: Start task has to be a TableSource";
 
@@ -205,117 +203,9 @@ public class JdbcExecutor extends ExecutorTemplate {
         // Create the SQL query.
         final StringBuilder query = createSqlString(jdbcExecutor, tableOp, filterTasks, projectionTask,
                 globalReduceTask, reduceByTask, sortTask, joinTasks,
-                joinTasks.isEmpty() ? null : composeJoinSelectClause(stage, startTask));
+                joinTasks.isEmpty() ? null : JoinBranches.composeJoinSelectClause(stage));
         
         return new Tuple2<>(query.toString(), tipChannelInstance);
-    }
-
-    /**
-     * The {@code SELECT} clause of a join stage: what every input branch projects, each
-     * column qualified by the table it came from.
-     *
-     * A single-table stage can walk forward from its one start task and find its one
-     * projection. A join has a branch per input, and only the left one lies on that walk,
-     * so the right branch's projection would never reach the query and its columns would
-     * silently vanish from the result. Qualifying is not cosmetic either: two joined
-     * tables routinely share a column name (a geometry column, an id), which is ambiguous
-     * unqualified.
-     *
-     * A branch that projects nothing contributes {@code <table>.*}. When no branch
-     * projects at all the clause is {@code null}, leaving the plain {@code *} that a join
-     * without projections has always produced.
-     */
-    private static String composeJoinSelectClause(final ExecutionStage stage, final ExecutionTask leftStartTask) {
-        final List<ExecutionTask> branches = new ArrayList<>();
-        branches.add(leftStartTask);
-        for (final Object startTask : stage.getStartTasks()) {
-            if (startTask != leftStartTask) {
-                branches.add((ExecutionTask) startTask);
-            }
-        }
-
-        final List<String> columns = new ArrayList<>();
-        boolean anyProjection = false;
-        for (final ExecutionTask branch : branches) {
-            if (!(branch.getOperator() instanceof JdbcTableSource)) {
-                // A branch whose columns cannot be named would be dropped from the
-                // result; fall back to selecting everything rather than lose it.
-                return null;
-            }
-            final String table = ((JdbcTableSource) branch.getOperator()).getTableName();
-            final JdbcProjectionOperator projection = findBranchProjection(branch, stage);
-            if (projection == null) {
-                columns.add(table + ".*");
-                continue;
-            }
-            anyProjection = true;
-            for (final String field : projection.getFunctionDescriptor().getFieldNames()) {
-                columns.add(table + "." + field);
-            }
-        }
-        return anyProjection ? String.join(", ", columns) : null;
-    }
-
-    /**
-     * The projection on one input branch of a join, or {@code null} if that branch has
-     * none. Stops at the join itself, so it never crosses into another branch.
-     */
-    private static JdbcProjectionOperator findBranchProjection(final ExecutionTask startTask,
-            final ExecutionStage stage) {
-        ExecutionTask task = JdbcExecutor.findJdbcExecutionOperatorTaskInStage(startTask, stage);
-        while (task != null) {
-            final ExecutionOperator operator = task.getOperator();
-            if (operator instanceof JoinOperator || operator instanceof SpatialJoinOperator) {
-                return null;
-            }
-            if (operator instanceof JdbcProjectionOperator) {
-                return (JdbcProjectionOperator) operator;
-            }
-            task = JdbcExecutor.findJdbcExecutionOperatorTaskInStage(task, stage);
-        }
-        return null;
-    }
-
-    /**
-     * Selects the table source that belongs on the left-hand side of a JDBC join.
-     * Stage start tasks are not ordered, but {@link JdbcJoinOperator#createSqlClause}
-     * assumes its first key descriptor's table is used in the {@code FROM} clause.
-     */
-    private static ExecutionTask selectStartTask(final Collection<?> startTasks, final ExecutionStage stage) {
-        if (startTasks.size() == 1) {
-            return (ExecutionTask) startTasks.iterator().next();
-        }
-
-        for (ExecutionTask task : stage.getAllTasks()) {
-            final String leftTableName = selectLeftTableName(task.getOperator());
-            if (leftTableName == null) continue;
-            for (Object startTaskObject : startTasks) {
-                final ExecutionTask startTask = (ExecutionTask) startTaskObject;
-                if (startTask.getOperator() instanceof JdbcTableSource
-                        && ((JdbcTableSource) startTask.getOperator()).getTableName().equals(leftTableName)) {
-                    return startTask;
-                }
-            }
-        }
-
-        throw new WayangException("Could not determine the left table source for JDBC stage.");
-    }
-
-    /**
-     * Returns the table name of the given join operator's first key descriptor,
-     * or {@code null} if the operator is not a join or has no SQL implementation.
-     */
-    private static String selectLeftTableName(final ExecutionOperator operator) {
-        final TransformationDescriptor<?, ?> keyDescriptor0;
-        if (operator instanceof final JdbcJoinOperator<?> joinOperator) {
-            keyDescriptor0 = joinOperator.getKeyDescriptor0();
-        } else if (operator instanceof final SpatialJoinOperator<?, ?> spatialJoinOperator) {
-            keyDescriptor0 = spatialJoinOperator.getKeyDescriptor0();
-        } else {
-            return null;
-        }
-        final Tuple<String, String> sqlImplementation = keyDescriptor0.getSqlImplementation();
-        return sqlImplementation == null ? null : sqlImplementation.field0;
     }
 
     /**
@@ -332,7 +222,7 @@ public class JdbcExecutor extends ExecutorTemplate {
         final Collection<?> startTasks = stage.getStartTasks();
         final Collection<?> termTasks = stage.getTerminalTasks();
 
-        final ExecutionTask startTask = JdbcExecutor.selectStartTask(startTasks, stage);
+        final ExecutionTask startTask = JoinBranches.selectStartTask(startTasks, stage);
         assert termTasks.size() == 1 : "Invalid JDBC stage: multiple terminal tasks are not currently supported.";
         final ExecutionTask termTask = (ExecutionTask) termTasks.toArray()[0];
         assert startTask.getOperator() instanceof TableSource
@@ -378,7 +268,7 @@ public class JdbcExecutor extends ExecutorTemplate {
         // Compose the SELECT query
         final StringBuilder selectQuery = createSqlString(jdbcExecutor, tableOp, filterTasks, projectionTask,
                 globalReduceTask, reduceByTask, sortTask, joinTasks,
-                joinTasks.isEmpty() ? null : composeJoinSelectClause(stage, startTask));
+                joinTasks.isEmpty() ? null : JoinBranches.composeJoinSelectClause(stage));
 
         // Remove trailing semicolon from SELECT
         String selectSql = selectQuery.toString();

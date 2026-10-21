@@ -317,4 +317,75 @@ public class PostgresSpatialIntegrationTest {
             assertTrue(g1.intersects(g2), "Found non-intersecting pair in spatial join result.");
         }
     }
+
+    /**
+     * A spatial join whose two inputs each carry their own projection. Only the left
+     * branch lies on the forward walk from the stage's start task, so this is the case
+     * where the right side's columns would silently vanish from the result.
+     */
+    @Test
+    void testSpatialJoinDbSourcesProjectsBothSides() {
+        Assumptions.assumeTrue(postgresAvailable, "Postgres not reachable");
+        WayangContext wayangContext = getTestWayangContext()
+                .withPlugin(Java.basicPlugin())
+                .withPlugin(Postgres.plugin())
+                .withPlugin(Spatial.plugin());
+
+        TableSource table1 = new PostgresTableSource("spider_boxes", "x_min", "y_min", "x_max", "y_max", "geom");
+        TableSource table2 = new PostgresTableSource("spider_boxes_copy", "x_min", "y_min", "x_max", "y_max", "geom");
+
+        // Different widths per side, so a clause that took one branch's columns for both
+        // would not match. Both tables have a geom column: unqualified it is ambiguous.
+        MapOperator<Record, Record> leftProjection =
+                MapOperator.createProjection(Record.class, Record.class, "x_min", "geom");
+        MapOperator<Record, Record> rightProjection =
+                MapOperator.createProjection(Record.class, Record.class, "geom");
+        leftProjection.addTargetPlatform(Postgres.platform());
+        rightProjection.addTargetPlatform(Postgres.platform());
+
+        PostgresSpatialJoinOperator<Record, Record> spatialJoinOperator =
+                new PostgresSpatialJoinOperator<>(
+                        new TransformationDescriptor<>(
+                                record -> WayangGeometry.fromStringInput((String) record.getField(1)),
+                                Record.class,
+                                WayangGeometry.class
+                        ),
+                        new TransformationDescriptor<>(
+                                record -> WayangGeometry.fromStringInput((String) record.getField(0)),
+                                Record.class,
+                                WayangGeometry.class
+                        ),
+                        SpatialPredicate.INTERSECTS
+                );
+        spatialJoinOperator.getKeyDescriptor0().withSqlImplementation("spider_boxes", "geom");
+        spatialJoinOperator.getKeyDescriptor1().withSqlImplementation("spider_boxes_copy", "geom");
+        spatialJoinOperator.addTargetPlatform(Postgres.platform());
+
+        table1.connectTo(0, leftProjection, 0);
+        table2.connectTo(0, rightProjection, 0);
+        leftProjection.connectTo(0, spatialJoinOperator, 0);
+        rightProjection.connectTo(0, spatialJoinOperator, 1);
+
+        Collection<Object> collector = new ArrayList<>();
+        @SuppressWarnings("unchecked")
+        LocalCallbackSink<Object> sink =
+                LocalCallbackSink.createCollectingSink(
+                        (Collection) collector,
+                        DataSetType.createDefaultUnchecked(Tuple2.class)
+                );
+        spatialJoinOperator.connectTo(0, sink, 0);
+
+        wayangContext.execute("PostgreSql spatial join DB-DB projected", new WayangPlan(sink));
+
+        assertFalse(collector.isEmpty(), "Projected spatial join result should not be empty.");
+
+        // Three columns, left-then-right: spider_boxes.x_min, spider_boxes.geom,
+        // spider_boxes_copy.geom. Before both branches contributed, the right side's geom
+        // was missing and every row was two fields wide.
+        for (Object element : collector) {
+            if (!(element instanceof Record)) break; // Java fallback: not the pushed-down path
+            assertEquals(3, ((Record) element).size(),
+                    "Projected join row should carry both branches' columns.");
+        }
+    }
 }
