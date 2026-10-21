@@ -20,38 +20,36 @@ package org.apache.wayang.spatial.function;
 
 import org.apache.wayang.core.api.spatial.SpatialPredicate;
 import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.prep.PreparedGeometry;
+import org.locationtech.jts.geom.prep.PreparedGeometryFactory;
 
 import java.util.Arrays;
 import java.util.function.BiPredicate;
+import java.util.function.Predicate;
 
 public enum JtsSpatialPredicate {
 
-    INTERSECTS("INTERSECTS", "ST_Intersects", Geometry::intersects),
-    CONTAINS("CONTAINS", "ST_Contains", Geometry::contains),
-    WITHIN("WITHIN", "ST_Within", Geometry::within),
-    TOUCHES("TOUCHES", "ST_Touches", Geometry::touches),
-    OVERLAPS("OVERLAPS", "ST_Overlaps", Geometry::overlaps),
-    CROSSES("CROSSES", "ST_Crosses", Geometry::crosses),
-    EQUALS("EQUALS", "ST_Equals", Geometry::equalsTopo);
+    INTERSECTS("INTERSECTS", "ST_Intersects", Geometry::intersects, PreparedGeometry::intersects),
+    CONTAINS("CONTAINS", "ST_Contains", Geometry::contains, PreparedGeometry::within),
+    WITHIN("WITHIN", "ST_Within", Geometry::within, PreparedGeometry::contains),
+    TOUCHES("TOUCHES", "ST_Touches", Geometry::touches, PreparedGeometry::touches),
+    OVERLAPS("OVERLAPS", "ST_Overlaps", Geometry::overlaps, PreparedGeometry::overlaps),
+    CROSSES("CROSSES", "ST_Crosses", Geometry::crosses, PreparedGeometry::crosses),
+    EQUALS("EQUALS", "ST_Equals", Geometry::equalsTopo, null);
 
     private final String opName;
     private final String sqlFunctionName;
     private final BiPredicate<Geometry, Geometry> predicate;
+    private final BiPredicate<PreparedGeometry, Geometry> preparedPredicate;
 
     JtsSpatialPredicate(String opName,
                         String sqlFunctionName,
-                        BiPredicate<Geometry, Geometry> predicate) {
+                        BiPredicate<Geometry, Geometry> predicate,
+                        BiPredicate<PreparedGeometry, Geometry> preparedPredicate) {
         this.opName = opName;
         this.sqlFunctionName = sqlFunctionName;
         this.predicate = predicate;
-    }
-
-    public static JtsSpatialPredicate fromString(String opName) {
-        return Arrays.stream(values())
-                .filter(r -> r.opName.equalsIgnoreCase(opName))
-                .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Unsupported spatial filter type: " + opName));
+        this.preparedPredicate = preparedPredicate;
     }
 
     /**
@@ -74,6 +72,22 @@ public enum JtsSpatialPredicate {
 
     public boolean test(Geometry candidate, Geometry reference) {
         return predicate.test(candidate, reference);
+    }
+
+    /**
+     * Fixes the reference geometry and prepares it once, so that testing many candidates against
+     * it does not re-process its edges on every call. Equivalent to {@link #test} with that
+     * reference.
+     *
+     * @param reference the reference geometry
+     * @return a predicate over candidate geometries
+     */
+    public Predicate<Geometry> against(Geometry reference) {
+        if (preparedPredicate == null) {
+            return candidate -> predicate.test(candidate, reference);
+        }
+        final PreparedGeometry prepared = PreparedGeometryFactory.prepare(reference);
+        return candidate -> preparedPredicate.test(prepared, candidate);
     }
 
     public String toSql(String columnExpr, String geomLiteral) {
