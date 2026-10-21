@@ -21,6 +21,7 @@ package org.apache.wayang.spatial.data;
 import org.apache.wayang.core.api.spatial.SpatialGeometry;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.PrecisionModel;
 import org.locationtech.jts.io.*;
 import org.locationtech.jts.io.geojson.GeoJsonReader;
 import org.locationtech.jts.io.geojson.GeoJsonWriter;
@@ -28,6 +29,8 @@ import org.locationtech.jts.io.geojson.GeoJsonWriter;
 import java.util.HashMap;
 
 public class WayangGeometry implements SpatialGeometry {
+
+    private static final String EWKT_SRID_PREFIX = "SRID=";
 
     private final HashMap<String, Object> data;
 
@@ -113,6 +116,15 @@ public class WayangGeometry implements SpatialGeometry {
     }
 
     /**
+     * EWKT and EWKB carry their SRID, GeoJSON defaults to 4326 (RFC 7946) unless it declares a
+     * {@code crs}, plain WKT has none.
+     */
+    @Override
+    public int getSrid() {
+        return getGeometry().getSRID();
+    }
+
+    /**
      * Get the geometry as WKT. If WKT is not yet available, it is
      * generated from another stored representation and cached.
      *
@@ -127,6 +139,9 @@ public class WayangGeometry implements SpatialGeometry {
         Geometry geometry = getGeometry();
         WKTWriter writer = new WKTWriter();
         String wkt = writer.write(geometry);
+        if (geometry.getSRID() != 0) {
+            wkt = EWKT_SRID_PREFIX + geometry.getSRID() + ";" + wkt;
+        }
         this.data.put("wkt", wkt);
         return wkt;
     }
@@ -144,7 +159,7 @@ public class WayangGeometry implements SpatialGeometry {
         }
 
         Geometry geometry = getGeometry();
-        WKBWriter writer = new WKBWriter();
+        WKBWriter writer = new WKBWriter(2, geometry.getSRID() != 0);
         byte[] wkbBytes = writer.write(geometry);
         String wkbHex = WKBWriter.toHex(wkbBytes);
         this.data.put("wkb", wkbHex);
@@ -178,7 +193,9 @@ public class WayangGeometry implements SpatialGeometry {
      * The first available representation is used in this order:
      * WKT -> WKB-hex -> GeoJSON
      *
-     * The resulting Geometry is cached in the data map under "geometry".
+     * The resulting Geometry carries the SRID of the representation it was
+     * parsed from (see {@link #getSrid()}) and is cached in the data map
+     * under "geometry".
      *
      * @return JTS Geometry instance
      */
@@ -188,24 +205,21 @@ public class WayangGeometry implements SpatialGeometry {
             return (Geometry) geomObj;
         }
 
-        GeometryFactory gf = new GeometryFactory();
         Geometry geometry;
 
         try {
             if (this.data.containsKey("wkt")) {
-                String wkt = cleanSRID(this.data.get("wkt").toString().trim());
-                WKTReader reader = new WKTReader(gf);
-                geometry = reader.read(wkt);
+                geometry = readWKT(this.data.get("wkt").toString().trim());
 
             } else if (this.data.containsKey("wkb")) {
                 String wkbHex = this.data.get("wkb").toString().trim();
                 byte[] wkbBytes = WKBReader.hexToBytes(wkbHex);
-                WKBReader reader = new WKBReader(gf);
+                WKBReader reader = new WKBReader();
                 geometry = reader.read(wkbBytes);
 
             } else if (this.data.containsKey("geojson")) {
                 String geoJson = this.data.get("geojson").toString().trim();
-                GeoJsonReader reader = new GeoJsonReader(gf);
+                GeoJsonReader reader = new GeoJsonReader();
                 geometry = reader.read(geoJson);
 
             } else {
@@ -222,7 +236,7 @@ public class WayangGeometry implements SpatialGeometry {
     // ---------- Helpers ---------- //
 
     private boolean looksLikeWKT(String s) {
-        return s.startsWith("SRID=") ||
+        return s.startsWith(EWKT_SRID_PREFIX) ||
                 s.startsWith("POINT") ||
                 s.startsWith("LINESTRING") ||
                 s.startsWith("POLYGON") ||
@@ -234,14 +248,21 @@ public class WayangGeometry implements SpatialGeometry {
         return s.startsWith("{") && s.contains("\"type\"");
     }
 
-    private String cleanSRID(String wkt) {
-        if (wkt.startsWith("SRID=")) {
-            int idx = wkt.indexOf(';');
-            if (idx > 0 && idx < wkt.length() - 1) {
-                return wkt.substring(idx + 1);
+    private static Geometry readWKT(String wkt) throws ParseException {
+        int srid = 0;
+        if (wkt.startsWith(EWKT_SRID_PREFIX)) {
+            int separator = wkt.indexOf(';');
+            if (separator < 0) {
+                throw new ParseException("EWKT is missing the ';' after its SRID: " + wkt);
             }
+            try {
+                srid = Integer.parseInt(wkt.substring(EWKT_SRID_PREFIX.length(), separator).trim());
+            } catch (NumberFormatException e) {
+                throw new ParseException("EWKT has a non-numeric SRID: " + wkt);
+            }
+            wkt = wkt.substring(separator + 1);
         }
-        return wkt;
+        return new WKTReader(new GeometryFactory(new PrecisionModel(), srid)).read(wkt);
     }
 
     @Override
@@ -259,7 +280,7 @@ public class WayangGeometry implements SpatialGeometry {
         }
 
         // Delegate to JTS Geometry equality (structural / topological, depending on JTS version).
-        return g1.equals(g2);
+        return g1.getSRID() == g2.getSRID() && g1.equals(g2);
     }
 
     @Override
