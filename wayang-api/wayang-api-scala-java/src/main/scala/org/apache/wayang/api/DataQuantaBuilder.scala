@@ -2165,6 +2165,9 @@ class SpatialFilterDataQuantaBuilder[T](inputDataQuanta: DataQuantaBuilder[_, T]
                                        (implicit javaPlanBuilder: JavaPlanBuilder)
   extends BasicDataQuantaBuilder[SpatialFilterDataQuantaBuilder[T], T] {
 
+  // Reuse the input TypeTrap to enforce type equality between input and output.
+  override def getOutputTypeTrap: TypeTrap = inputDataQuanta.outputTypeTrap
+
   private var columnName: String = _
 
   def withSqlGeometryColumnName(columnName: String): SpatialFilterDataQuantaBuilder[T] = {
