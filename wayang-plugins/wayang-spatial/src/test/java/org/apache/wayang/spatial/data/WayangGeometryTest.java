@@ -18,11 +18,12 @@
 
 package org.apache.wayang.spatial.data;
 
-import org.apache.wayang.spatial.data.WayangGeometry;
+import org.apache.wayang.spatial.crs.CrsTransforms;
 import org.junit.Test;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.PrecisionModel;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.io.WKBReader;
 import org.locationtech.jts.io.WKBWriter;
@@ -78,8 +79,7 @@ public class WayangGeometryTest {
         String wkt = wGeometry.getWKT();
         assertTrue("Original WKT (with SRID) should be preserved.", wkt.startsWith("SRID="));
 
-        // Verify that parsing the same WKT without SRID gives an equal geometry,
-        // which indirectly asserts that cleanSRID() worked as expected.
+        // Verify that parsing the same WKT without SRID gives the same coordinates.
         String wktWithoutSrid = "POINT (1 2)";
         WayangGeometry wGeometryNoSrid = WayangGeometry.fromStringInput(wktWithoutSrid);
         Geometry geomNoSrid = wGeometryNoSrid.getGeometry();
@@ -217,5 +217,90 @@ public class WayangGeometryTest {
         Geometry g2 = wGeometry.getGeometry();
 
         assertSame("getGeometry should cache and return the same instance.", g1, g2);
+    }
+
+    @Test
+    public void testEWKTCarriesSrid() {
+        WayangGeometry wGeometry = WayangGeometry.fromStringInput("SRID=25832;POINT (1 2)");
+
+        assertEquals(25832, wGeometry.getSrid());
+        assertEquals(25832, readWKB(wGeometry.getWKB()).getSRID());
+    }
+
+    @Test
+    public void testPlainWKTHasNoSrid() {
+        WayangGeometry wGeometry = WayangGeometry.fromStringInput("POINT (1 2)");
+
+        assertEquals(0, wGeometry.getSrid());
+        assertEquals("POINT (1 2)", WayangGeometry.fromStringInput(wGeometry.getWKB()).getWKT());
+    }
+
+    @Test
+    public void testEWKBCarriesSrid() {
+        Point point = new GeometryFactory(new PrecisionModel(), 3857).createPoint(new Coordinate(1.0, 2.0));
+        String ewkbHex = WKBWriter.toHex(new WKBWriter(2, true).write(point));
+
+        WayangGeometry wGeometry = WayangGeometry.fromStringInput(ewkbHex);
+
+        assertEquals(3857, wGeometry.getSrid());
+        assertEquals(ewkbHex, wGeometry.getWKB());
+        assertEquals("SRID=3857;POINT (1 2)", wGeometry.getWKT());
+    }
+
+    @Test
+    public void testGeoJSONDefaultsToWgs84() {
+        WayangGeometry wGeometry = WayangGeometry.fromStringInput("{\"type\":\"Point\",\"coordinates\":[7.0,8.0]}");
+
+        assertEquals(4326, wGeometry.getSrid());
+        assertEquals("SRID=4326;POINT (7 8)", wGeometry.getWKT());
+    }
+
+    @Test
+    public void testGeoJSONCrsOverridesDefault() {
+        WayangGeometry wGeometry = WayangGeometry.fromStringInput(
+                "{\"type\":\"Point\",\"coordinates\":[7.0,8.0],"
+                        + "\"crs\":{\"type\":\"name\",\"properties\":{\"name\":\"EPSG:25832\"}}}");
+
+        assertEquals(25832, wGeometry.getSrid());
+    }
+
+    @Test
+    public void testSridSurvivesGeoJSONRoundTrip() {
+        WayangGeometry original = WayangGeometry.fromStringInput("SRID=25832;POINT (1 2)");
+
+        assertEquals(25832, WayangGeometry.fromStringInput(original.getGeoJSON()).getSrid());
+    }
+
+    @Test
+    public void testTransformedGeometryKeepsTargetSridInWKB() {
+        WayangGeometry source = WayangGeometry.fromStringInput("SRID=4326;POINT (9 50)");
+
+        Geometry transformed = CrsTransforms.transform(source.getGeometry(), source.getSrid(), 3857);
+        WayangGeometry target = WayangGeometry.fromStringInput(WayangGeometry.fromGeometry(transformed).toWKB());
+
+        assertEquals(3857, target.getSrid());
+        assertTrue(transformed.equalsExact(target.getGeometry()));
+    }
+
+    @Test
+    public void testEqualsDistinguishesSrid() {
+        WayangGeometry wgs84 = WayangGeometry.fromStringInput("SRID=4326;POINT (1 2)");
+
+        assertEquals(wgs84, WayangGeometry.fromStringInput("SRID=4326;POINT (1 2)"));
+        assertNotEquals(wgs84, WayangGeometry.fromStringInput("SRID=3857;POINT (1 2)"));
+        assertNotEquals(wgs84, WayangGeometry.fromStringInput("POINT (1 2)"));
+    }
+
+    @Test(expected = RuntimeException.class)
+    public void testNonNumericEWKTSridThrowsRuntimeException() {
+        WayangGeometry.fromStringInput("SRID=abc;POINT (1 2)").getGeometry();
+    }
+
+    private static Geometry readWKB(String hex) {
+        try {
+            return new WKBReader().read(WKBReader.hexToBytes(hex));
+        } catch (org.locationtech.jts.io.ParseException e) {
+            throw new AssertionError(e);
+        }
     }
 }
