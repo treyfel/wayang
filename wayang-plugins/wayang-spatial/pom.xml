@@ -34,6 +34,7 @@
     <properties>
         <java-module-name>org.apache.wayang.extensions.spatial</java-module-name>
         <jts.version>1.19.0</jts.version>
+        <proj4j.version>1.2.2</proj4j.version>
     </properties>
 
     <dependencies>
@@ -94,6 +95,14 @@
             <groupId>org.locationtech.jts.io</groupId>
             <artifactId>jts-io-common</artifactId>
             <version>${jts.version}</version>
+        </dependency>
+
+        <!-- proj4j: CRS transformation. Pinned to the version calcite-core already brings
+             transitively, to avoid a conflict. Must not leak out of this plugin. -->
+        <dependency>
+            <groupId>org.locationtech.proj4j</groupId>
+            <artifactId>proj4j</artifactId>
+            <version>${proj4j.version}</version>
         </dependency>
 
         <!-- Apache Sedona (for Spark spatial operations) -->

@@ -28,7 +28,7 @@ import _root_.java.util.{Collection => JavaCollection}
 import org.apache.commons.lang3.Validate
 import org.apache.wayang.basic.function.ProjectionDescriptor
 import org.apache.wayang.basic.operators._
-import org.apache.wayang.core.function.FunctionDescriptor.{SerializableBinaryOperator, SerializableFunction, SerializableIntUnaryOperator, SerializablePredicate}
+import org.apache.wayang.core.function.FunctionDescriptor.{SerializableBiFunction, SerializableBinaryOperator, SerializableFunction, SerializableIntUnaryOperator, SerializablePredicate}
 import org.apache.wayang.core.function._
 import org.apache.wayang.core.optimizer.ProbabilisticDoubleInterval
 import org.apache.wayang.core.optimizer.cardinality.CardinalityEstimator
@@ -746,6 +746,44 @@ class DataQuanta[Out: ClassTag](val operator: ElementaryOperator, outputIndex: I
     this.connectTo(op, 0)
     that.connectTo(op, 1)
     wrap[WayangTuple2[Out, ThatOut]](op)
+  }
+
+  /**
+    * Feeds this and a further instance into a [[CRSTransformationOperator]].
+    * Reprojects the geometry of each data quantum from one source CRS into a target CRS.
+    *
+    * @param keyUdf     UDF to extract the spatial geometry to reproject from data quanta
+    * @param updater    UDF to write the reprojected geometry back into its data quantum
+    * @param targetSrid the EPSG code of the CRS to reproject into
+    * @param sourceSrid the EPSG code to read the geometries in, or
+    *                   `SpatialGeometry.SRID_UNKNOWN` to use the SRID that each geometry carries
+    * @return a new instance representing the CRSTransformationOperator's output
+    */
+  def crsTransform(keyUdf: Out => SpatialGeometry,
+                   updater: (Out, SpatialGeometry) => Out,
+                   targetSrid: Int,
+                   sourceSrid: Int = SpatialGeometry.SRID_UNKNOWN): DataQuanta[Out] =
+    crsTransformJava(toSerializableFunction(keyUdf), toSerializableBiFunction(updater), targetSrid, sourceSrid)
+
+  /**
+    * Reprojects the geometry of every data quantum of this instance into another coordinate
+    * reference system. Wayang does not insert this operator on its own: a plan that mixes
+    * coordinate reference systems has to place it.
+    *
+    * @param keyUdf     UDF to extract the spatial geometry to reproject from data quanta
+    * @param updater    UDF to write the reprojected geometry back into its data quantum
+    * @param targetSrid the EPSG code of the CRS to reproject into
+    * @param sourceSrid the EPSG code to read the geometries in, or
+    *                   `SpatialGeometry.SRID_UNKNOWN` to use the SRID that each geometry carries
+    * @return a new instance representing the CRSTransformationOperator's output
+    */
+  def crsTransformJava(keyUdf: SerializableFunction[Out, _ <: SpatialGeometry],
+                       updater: SerializableBiFunction[Out, SpatialGeometry, Out],
+                       targetSrid: Int,
+                       sourceSrid: Int = SpatialGeometry.SRID_UNKNOWN): DataQuanta[Out] = {
+    val op = new CRSTransformationOperator(keyUdf, updater, dataSetType[Out], sourceSrid, targetSrid)
+    this.connectTo(op, 0)
+    wrap[Out](op)
   }
 
   def predict[ThatOut: ClassTag](

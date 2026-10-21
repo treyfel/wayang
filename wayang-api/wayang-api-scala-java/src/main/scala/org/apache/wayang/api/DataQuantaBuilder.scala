@@ -334,6 +334,23 @@ trait DataQuantaBuilder[+This <: DataQuantaBuilder[_, Out], Out] extends Logging
     new SpatialJoinDataQuantaBuilder(this, that, thisKeyUdf, thatKeyUdf, predicate)
 
   /**
+    * Feed the built [[DataQuanta]] into a CRS transformation operator. Wayang does not insert one
+    * on its own: a plan that mixes coordinate reference systems has to place it.
+    * Requires the wayang-spatial plugin to be loaded.
+    *
+    * @param keyUdf     function to extract the geometry to reproject from elements
+    * @param updater    function to write the reprojected geometry back into its element
+    * @param targetSrid the EPSG code of the CRS to reproject into
+    * @return a [[CRSTransformDataQuantaBuilder]] representing the reprojected output
+    */
+  def crsTransform(
+      keyUdf: SerializableFunction[Out, _ <: SpatialGeometry],
+      updater: SerializableBiFunction[Out, SpatialGeometry, Out],
+      targetSrid: Int
+  ): CRSTransformDataQuantaBuilder[Out] =
+    new CRSTransformDataQuantaBuilder(this, keyUdf, updater, targetSrid)
+
+  /**
    * Feed the built [[DataQuanta]] of this and the given instance into a
    * [[org.apache.wayang.basic.operators.DLTrainingOperator]].
    *
@@ -2179,6 +2196,35 @@ class SpatialFilterDataQuantaBuilder[T](inputDataQuanta: DataQuantaBuilder[_, T]
     val dq = inputDataQuanta.dataQuanta()
     dq.spatialFilterJava(keySelector, predicateType, filterGeometry, this.columnName)
   }
+}
+
+class CRSTransformDataQuantaBuilder[T](inputDataQuanta: DataQuantaBuilder[_, T],
+                                       keyUdf: SerializableFunction[T, _ <: SpatialGeometry],
+                                       updater: SerializableBiFunction[T, SpatialGeometry, T],
+                                       targetSrid: Int)
+                                      (implicit javaPlanBuilder: JavaPlanBuilder)
+  extends BasicDataQuantaBuilder[CRSTransformDataQuantaBuilder[T], T] {
+
+  override def getOutputTypeTrap: TypeTrap = inputDataQuanta.outputTypeTrap
+
+  private var sourceSrid: Int = SpatialGeometry.SRID_UNKNOWN
+
+  /**
+    * Read the geometries in the given CRS instead of the SRID that each one carries.
+    *
+    * @param sourceSrid the EPSG code of the CRS the geometries are in
+    * @return this instance
+    */
+  def withSourceSrid(sourceSrid: Int): CRSTransformDataQuantaBuilder[T] = {
+    this.sourceSrid = sourceSrid
+    this
+  }
+
+  override protected def build: DataQuanta[T] =
+    applyTargetPlatforms(
+      inputDataQuanta.dataQuanta().crsTransformJava(keyUdf, updater, targetSrid, this.sourceSrid),
+      this.getTargetPlatforms()
+    )
 }
 
 class SpatialJoinDataQuantaBuilder[In0, In1](inputDataQuanta0: DataQuantaBuilder[_, In0],

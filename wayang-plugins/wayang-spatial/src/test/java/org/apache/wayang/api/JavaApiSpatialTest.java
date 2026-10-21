@@ -21,6 +21,7 @@ package org.apache.wayang.api;
 import org.apache.wayang.basic.data.Record;
 import org.apache.wayang.core.api.Configuration;
 import org.apache.wayang.core.api.WayangContext;
+import org.apache.wayang.core.api.spatial.SpatialGeometry;
 import org.apache.wayang.core.api.spatial.SpatialPredicate;
 import org.apache.wayang.java.Java;
 import org.apache.wayang.postgres.Postgres;
@@ -596,6 +597,83 @@ public class JavaApiSpatialTest {
         assertEquals(1, result.size());
         Long count = result.iterator().next();
         System.out.println("PostgreSQL Spatial Filter (ST_Within): " + count + " boxes within the query geometry");
+    }
+
+    // ==================== CRS Transformation ====================
+
+    @Test
+    void testCrsTransformBeforeSpatialFilter() {
+        WayangContext wayangContext = new WayangContext(new Configuration())
+                .withPlugin(Java.basicPlugin())
+                .withPlugin(Spatial.javaPlugin());
+
+        List<String> points = Arrays.asList("SRID=4326;POINT(9 50)", "SRID=4326;POINT(10 50)");
+        WayangGeometry webMercatorBox = WayangGeometry.fromStringInput(
+                "SRID=3857;POLYGON((1000000 6440000, 1010000 6440000, 1010000 6450000, 1000000 6450000, 1000000 6440000))");
+
+        Collection<String> result = new JavaPlanBuilder(wayangContext)
+                .withJobName("CRS Transform Test")
+                .loadCollection(points)
+                .crsTransform(WayangGeometry::fromStringInput, (wkt, geometry) -> geometry.toWKT(), 3857)
+                .spatialFilter(WayangGeometry::fromStringInput, SpatialPredicate.INTERSECTS, webMercatorBox)
+                .collect();
+
+        assertEquals(1, result.size());
+        WayangGeometry transformed = WayangGeometry.fromStringInput(result.iterator().next());
+        assertEquals(3857, transformed.getSrid());
+        assertEquals(1001875.42, transformed.getGeometry().getCoordinate().x, 0.01);
+    }
+
+    @Test
+    void testCrsTransformWithSourceSrid() {
+        WayangContext wayangContext = new WayangContext(new Configuration())
+                .withPlugin(Java.basicPlugin())
+                .withPlugin(Spatial.javaPlugin());
+
+        Collection<SpatialGeometry> result = new JavaPlanBuilder(wayangContext)
+                .withJobName("CRS Transform Source SRID Test")
+                .loadCollection(Arrays.<SpatialGeometry>asList(WayangGeometry.fromStringInput("POINT(9 50)")))
+                .crsTransform(geometry -> geometry, (geometry, transformed) -> transformed, 3857)
+                .withSourceSrid(4326)
+                .collect();
+
+        assertEquals(1, result.size());
+        assertEquals(3857, result.iterator().next().getSrid());
+    }
+
+    /**
+     * Runs the transformation on Spark, which serializes the reprojection closure and ships it to
+     * its executors even in local mode, once with each geometry's own SRID and once with a declared
+     * source CRS.
+     */
+    @Test
+    void testCrsTransformWithSpark() {
+        WayangContext wayangContext = new WayangContext(new Configuration())
+                .withPlugin(Spark.basicPlugin())
+                .withPlugin(Spatial.sparkPlugin());
+
+        Collection<String> ownSrid = new JavaPlanBuilder(wayangContext)
+                .withJobName("CRS Transform Spark Test")
+                .loadCollection(Arrays.asList("SRID=4326;POINT(9 50)", "SRID=4326;POINT(10 50)"))
+                .crsTransform(WayangGeometry::fromStringInput, (wkt, geometry) -> geometry.toWKT(), 3857)
+                .collect();
+
+        assertEquals(2, ownSrid.size());
+        for (String wkt : ownSrid) {
+            assertEquals(3857, WayangGeometry.fromStringInput(wkt).getSrid());
+        }
+
+        Collection<String> declaredSrid = new JavaPlanBuilder(wayangContext)
+                .withJobName("CRS Transform Spark Source SRID Test")
+                .loadCollection(Arrays.asList("POINT(9 50)"))
+                .crsTransform(WayangGeometry::fromStringInput, (wkt, geometry) -> geometry.toWKT(), 3857)
+                .withSourceSrid(4326)
+                .collect();
+
+        assertEquals(1, declaredSrid.size());
+        WayangGeometry transformed = WayangGeometry.fromStringInput(declaredSrid.iterator().next());
+        assertEquals(3857, transformed.getSrid());
+        assertEquals(1001875.42, transformed.getGeometry().getCoordinate().x, 0.01);
     }
 
     // ==================== GeoJSON Source / Sink ====================
