@@ -75,6 +75,8 @@ public class JavaSpatialFilterOperator<Type>
             ChannelInstance[] outputs,
             JavaExecutor javaExecutor,
             OptimizationContext.OperatorContext operatorContext) {
+        assert inputs.length == this.getNumInputs();
+        assert outputs.length == this.getNumOutputs();
 
         final Predicate<Type> filterPredicate = this.buildSpatialPredicate(javaExecutor);
         ((StreamChannel.Instance) outputs[0]).accept(
@@ -88,9 +90,9 @@ public class JavaSpatialFilterOperator<Type>
         WayangGeometry wRef = (WayangGeometry) this.referenceGeometry;
         final Geometry reference = wRef.getGeometry();
         final Function<Type, ? extends SpatialGeometry> keyExtractor = javaExecutor.getCompiler().compile(this.keyDescriptor);
-        JtsSpatialPredicate predicate = JtsSpatialPredicate.of(this.predicateType);
+        final Predicate<Geometry> predicate = JtsSpatialPredicate.of(this.predicateType).against(reference);
 
-        return input -> predicate.test(((WayangGeometry) keyExtractor.apply(input)).getGeometry(), reference);
+        return input -> predicate.test(((WayangGeometry) keyExtractor.apply(input)).getGeometry());
     }
 
     @Override
