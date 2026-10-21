@@ -39,4 +39,18 @@ public interface SpatialGeometry extends Serializable {
      * @return WKB hex string
      */
     String toWKB();
+
+    /**
+     * The SRID of a geometry whose coordinate reference system is not known.
+     */
+    int SRID_UNKNOWN = 0;
+
+    /**
+     * Returns the spatial reference identifier (an EPSG code) of this geometry.
+     *
+     * @return the SRID, or {@link #SRID_UNKNOWN} if unknown
+     */
+    default int getSrid() {
+        return SRID_UNKNOWN;
+    }
 }
