@@ -18,6 +18,7 @@
 
 package org.apache.wayang.spatial.mapping;
 
+import org.apache.wayang.basic.operators.CRSTransformationOperator;
 import org.apache.wayang.basic.operators.SpatialKNNSearchOperator;
 import org.apache.wayang.basic.operators.GeoJsonFileSource;
 import org.apache.wayang.basic.operators.SpatialFilterOperator;
@@ -32,7 +33,7 @@ import java.util.Collection;
 
 /**
  * {@link Mapping}s for the {@link SpatialFilterOperator}, {@link SpatialKNNSearchOperator}, {@link SpatialJoinOperator},
- * and {@link GeoJsonFileSource}.
+ * {@link CRSTransformationOperator}, and {@link GeoJsonFileSource}.
  */
 public class Mappings {
 
@@ -43,6 +44,7 @@ public class Mappings {
             new org.apache.wayang.spatial.mapping.java.SpatialFilterMapping(),
             new org.apache.wayang.spatial.mapping.java.SpatialKNNSearchMapping(),
             new org.apache.wayang.spatial.mapping.java.SpatialJoinMapping(),
+            new org.apache.wayang.spatial.mapping.java.CRSTransformationMapping(),
             new org.apache.wayang.spatial.mapping.java.GeoJsonFileSourceMapping(),
             new org.apache.wayang.spatial.mapping.java.GeoJsonFileSinkMapping()
     );
@@ -52,7 +54,8 @@ public class Mappings {
      */
     public static Collection<Mapping> sparkMappings = Arrays.asList(
             new org.apache.wayang.spatial.mapping.spark.SpatialFilterMapping(),
-            new org.apache.wayang.spatial.mapping.spark.SpatialJoinMapping()
+            new org.apache.wayang.spatial.mapping.spark.SpatialJoinMapping(),
+            new org.apache.wayang.spatial.mapping.spark.CRSTransformationMapping()
     );
 
     /**

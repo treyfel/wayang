@@ -23,7 +23,7 @@ import _root_.java.util.function.{Consumer, ToLongBiFunction, ToLongFunction}
 import org.apache.wayang.basic.data.{Record, Tuple2 => WayangTuple2}
 import org.apache.wayang.core.api.WayangContext
 import org.apache.wayang.core.function.FunctionDescriptor
-import org.apache.wayang.core.function.FunctionDescriptor.{SerializableBinaryOperator, SerializableFunction, SerializablePredicate, SerializableToLongBiFunction}
+import org.apache.wayang.core.function.FunctionDescriptor.{SerializableBiFunction, SerializableBinaryOperator, SerializableFunction, SerializablePredicate, SerializableToLongBiFunction}
 import org.apache.wayang.core.optimizer.ProbabilisticDoubleInterval
 import org.apache.wayang.core.optimizer.cardinality.{CardinalityEstimate, CardinalityEstimator, DefaultCardinalityEstimator, FixedSizeCardinalityEstimator}
 import org.apache.wayang.core.optimizer.costs.{DefaultLoadEstimator, LoadEstimator, LoadProfileEstimator, NestableLoadProfileEstimator}
@@ -85,6 +85,11 @@ package object api {
   implicit def toSerializableFlatteningFunction[In, Out](scalaFunc: In => Iterable[Out]): SerializableFunction[In, JavaIterable[Out]] =
     new SerializableFunction[In, JavaIterable[Out]] {
       override def apply(t: In) = JavaConversions.asJavaIterable(scalaFunc(t))
+    }
+
+  implicit def toSerializableBiFunction[In0, In1, Out](scalaFunc: (In0, In1) => Out): SerializableBiFunction[In0, In1, Out] =
+    new SerializableBiFunction[In0, In1, Out] {
+      override def apply(t1: In0, t2: In1) = scalaFunc(t1, t2)
     }
 
   implicit def toSerializableBinaryOperator[T](scalaFunc: (T, T) => T): SerializableBinaryOperator[T] =
