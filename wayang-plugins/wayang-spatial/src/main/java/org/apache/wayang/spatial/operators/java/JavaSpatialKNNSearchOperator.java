@@ -19,6 +19,7 @@
 package org.apache.wayang.spatial.operators.java;
 
 import org.apache.wayang.basic.operators.SpatialKNNSearchOperator;
+import org.apache.wayang.core.api.exception.WayangException;
 import org.apache.wayang.core.api.spatial.SpatialGeometry;
 import org.apache.wayang.core.function.FunctionDescriptor;
 import org.apache.wayang.core.optimizer.OptimizationContext;
@@ -48,10 +49,18 @@ import java.util.function.Function;
 
 /**
  * Java implementation of the {@link SpatialKNNSearchOperator}.
+ * <p>
+ * Scans the input once and keeps the k nearest elements in a bounded heap. Elements whose key is {@code null}
+ * or empty are skipped. Among elements at equal distance, which ones are kept depends on input order.
  */
 public class JavaSpatialKNNSearchOperator<Type>
         extends SpatialKNNSearchOperator<Type>
         implements JavaExecutionOperator {
+
+    /**
+     * Upper bound for the heap's initial capacity, so that a very large {@code k} does not allocate up front.
+     */
+    private static final int MAX_INITIAL_HEAP_CAPACITY = 1024;
 
     /**
      * Creates a new instance.
@@ -78,22 +87,40 @@ public class JavaSpatialKNNSearchOperator<Type>
             OptimizationContext.OperatorContext operatorContext) {
         assert inputs.length == this.getNumInputs();
         assert outputs.length == this.getNumOutputs();
+        this.validateArguments();
 
         final Function<Type, ? extends SpatialGeometry> keyExtractor = javaExecutor.getCompiler().compile(this.keyDescriptor);
         final Geometry reference = ((WayangGeometry) this.referenceGeometry).getGeometry();
         final Envelope referenceEnvelope = reference.getEnvelopeInternal();
+        final int referenceSrid = reference.getSRID();
 
         // Max-heap on distance: the head is the farthest of the current k nearest.
         final PriorityQueue<Tuple<Double, Type>> nearest = new PriorityQueue<>(
-                Math.max(1, this.k),
+                Math.max(1, Math.min(this.k, MAX_INITIAL_HEAP_CAPACITY)),
                 Comparator.comparingDouble((Tuple<Double, Type> t) -> t.field0).reversed());
 
         if (this.k > 0) {
             ((JavaChannelInstance) inputs[0]).<Type>provideStream().forEach(element -> {
-                final Geometry candidate = ((WayangGeometry) keyExtractor.apply(element)).getGeometry();
+                final SpatialGeometry key = keyExtractor.apply(element);
+                if (key == null) {
+                    return; // no geometry, no distance
+                }
+                final Geometry candidate = ((WayangGeometry) key).getGeometry();
+                if (candidate == null || candidate.isEmpty()) {
+                    return; // JTS reports distance 0 to an empty geometry, which would rank it first
+                }
+                final int candidateSrid = candidate.getSRID();
+                if (referenceSrid != SpatialGeometry.SRID_UNKNOWN && candidateSrid != SpatialGeometry.SRID_UNKNOWN
+                        && referenceSrid != candidateSrid) {
+                    throw new WayangException(String.format(
+                            "Spatial kNN search cannot compare SRID %d with reference SRID %d; transform one of them first.",
+                            candidateSrid, referenceSrid));
+                }
                 final boolean full = nearest.size() >= this.k;
+                // The envelope distance never exceeds the geometry distance, so a candidate whose envelope is
+                // not closer than the current k-th nearest cannot replace it.
                 if (full && referenceEnvelope.distance(candidate.getEnvelopeInternal()) >= nearest.peek().field0) {
-                    return; // skip if candidate envelope distance to reference envelope is larger than currently farthest
+                    return;
                 }
                 final double distance = reference.distance(candidate);
                 if (!full) {

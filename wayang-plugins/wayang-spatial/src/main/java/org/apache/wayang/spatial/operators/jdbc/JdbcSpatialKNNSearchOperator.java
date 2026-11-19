@@ -54,12 +54,7 @@ public abstract class JdbcSpatialKNNSearchOperator<Type> extends SpatialKNNSearc
 
     @Override
     public String createSqlClause(Connection connection, FunctionCompiler compiler) {
-        if (this.referenceGeometry == null) {
-            throw new IllegalStateException("Geometry for spatial kNN search must not be null.");
-        }
-        if (this.k == null || this.k < 0) {
-            throw new IllegalStateException("k for spatial kNN search must be non-negative, but was " + this.k + ".");
-        }
+        this.validateArguments();
 
         // Column expression (e.g. "geom" or "t.geom")
         final String columnExpr = this.keyDescriptor.getSqlImplementation().getField1();

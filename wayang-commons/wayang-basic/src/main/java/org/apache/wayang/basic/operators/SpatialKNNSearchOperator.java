@@ -75,6 +75,21 @@ public class SpatialKNNSearchOperator<Type> extends UnaryToUnaryOperator<Type, T
     }
 
     /**
+     * Checks the arguments before execution. The constructor cannot do this, because mappings build
+     * pattern instances with {@code null} arguments.
+     *
+     * @throws IllegalStateException if {@code k} is {@code null} or negative, or the reference geometry is {@code null}
+     */
+    protected void validateArguments() {
+        if (this.referenceGeometry == null) {
+            throw new IllegalStateException("Geometry for spatial kNN search must not be null.");
+        }
+        if (this.k == null || this.k < 0) {
+            throw new IllegalStateException("k for spatial kNN search must be non-negative, but was " + this.k + ".");
+        }
+    }
+
+    /**
      * The output holds the k nearest elements, or the whole input if it has fewer than k.
      */
     @Override

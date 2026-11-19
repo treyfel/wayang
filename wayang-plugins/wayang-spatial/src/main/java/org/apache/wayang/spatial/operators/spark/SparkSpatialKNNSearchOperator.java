@@ -85,6 +85,7 @@ public class SparkSpatialKNNSearchOperator<Type>
             OptimizationContext.OperatorContext operatorContext) {
         assert inputs.length == this.getNumInputs();
         assert outputs.length == this.getNumOutputs();
+        this.validateArguments();
 
         // Register Sedona JAR with Spark executors if running in cluster mode.
         if (!sparkExecutor.sc.isLocal()) {
