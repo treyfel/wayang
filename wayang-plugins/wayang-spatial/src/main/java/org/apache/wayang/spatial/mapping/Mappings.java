@@ -51,6 +51,7 @@ public class Mappings {
      */
     public static Collection<Mapping> sparkMappings = Arrays.asList(
             new org.apache.wayang.spatial.mapping.spark.SpatialFilterMapping(),
+            new org.apache.wayang.spatial.mapping.spark.SpatialKNNSearchMapping(),
             new org.apache.wayang.spatial.mapping.spark.SpatialJoinMapping()
     );
 
