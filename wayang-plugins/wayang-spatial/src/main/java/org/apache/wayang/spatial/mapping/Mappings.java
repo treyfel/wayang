@@ -21,6 +21,8 @@ package org.apache.wayang.spatial.mapping;
 import org.apache.wayang.basic.operators.SpatialKNNSearchOperator;
 import org.apache.wayang.basic.operators.GeoJsonFileSource;
 import org.apache.wayang.basic.operators.SpatialFilterOperator;
+import org.apache.wayang.basic.operators.SpatialIndexKNNSearchOperator;
+import org.apache.wayang.basic.operators.SpatialIndexOperator;
 import org.apache.wayang.basic.operators.SpatialJoinOperator;
 import org.apache.wayang.core.mapping.Mapping;
 import org.apache.wayang.java.platform.JavaPlatform;
@@ -32,7 +34,7 @@ import java.util.Collection;
 
 /**
  * {@link Mapping}s for the {@link SpatialFilterOperator}, {@link SpatialKNNSearchOperator}, {@link SpatialJoinOperator},
- * and {@link GeoJsonFileSource}.
+ * {@link SpatialIndexOperator}, {@link SpatialIndexKNNSearchOperator}, and {@link GeoJsonFileSource}.
  */
 public class Mappings {
 
@@ -42,6 +44,8 @@ public class Mappings {
     public static Collection<Mapping> javaMappings = Arrays.asList(
             new org.apache.wayang.spatial.mapping.java.SpatialFilterMapping(),
             new org.apache.wayang.spatial.mapping.java.SpatialKNNSearchMapping(),
+            new org.apache.wayang.spatial.mapping.java.SpatialIndexMapping(),
+            new org.apache.wayang.spatial.mapping.java.SpatialIndexKNNSearchMapping(),
             new org.apache.wayang.spatial.mapping.java.SpatialJoinMapping(),
             new org.apache.wayang.spatial.mapping.java.GeoJsonFileSourceMapping()
     );
