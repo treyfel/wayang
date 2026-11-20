@@ -106,4 +106,8 @@ public class JavaSpatialFilterOperator<Type>
         return Collections.singletonList(StreamChannel.DESCRIPTOR);
     }
 
+    @Override
+    public String getLoadProfileEstimatorConfigurationKey() {
+        return "wayang.java.spatialfilter.load";
+    }
 }

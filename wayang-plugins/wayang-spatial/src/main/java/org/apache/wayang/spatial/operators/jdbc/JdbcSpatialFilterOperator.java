@@ -75,4 +75,9 @@ public abstract class JdbcSpatialFilterOperator<Type> extends SpatialFilterOpera
         JtsSpatialPredicate relation = JtsSpatialPredicate.of(this.predicateType);
         return relation.toSql(columnExpr, geomLiteral);
     }
+
+    @Override
+    public String getLoadProfileEstimatorConfigurationKey() {
+        return String.format("wayang.%s.spatialfilter.load", this.getPlatform().getPlatformId());
+    }
 }

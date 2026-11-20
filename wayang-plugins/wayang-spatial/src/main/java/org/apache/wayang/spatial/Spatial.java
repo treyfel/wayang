@@ -26,6 +26,7 @@ import org.apache.wayang.core.mapping.Mapping;
 import org.apache.wayang.core.optimizer.channels.ChannelConversion;
 import org.apache.wayang.core.platform.Platform;
 import org.apache.wayang.core.plugin.Plugin;
+import org.apache.wayang.core.util.ReflectionUtils;
 import org.apache.wayang.spatial.mapping.Mappings;
 import org.apache.wayang.java.Java;
 import org.apache.wayang.java.platform.JavaPlatform;
@@ -44,6 +45,15 @@ import java.util.Collections;
  * and {@link GeoJsonFileSource}.
  */
 public class Spatial {
+
+    /**
+     * Load profiles of the spatial execution operators.
+     */
+    private static final String DEFAULT_CONFIG_FILE = "wayang-spatial-defaults.properties";
+
+    private static void loadDefaults(Configuration configuration) {
+        configuration.load(ReflectionUtils.loadResource(DEFAULT_CONFIG_FILE));
+    }
 
     /**
      * Enables use with the {@link JavaPlatform}, {@link SparkPlatform}, and {@link PostgresPlatform}.
@@ -71,6 +81,7 @@ public class Spatial {
 
         @Override
         public void setProperties(Configuration configuration) {
+            loadDefaults(configuration);
         }
     };
 
@@ -106,6 +117,7 @@ public class Spatial {
 
         @Override
         public void setProperties(Configuration configuration) {
+            loadDefaults(configuration);
         }
     };
 
@@ -140,6 +152,7 @@ public class Spatial {
 
         @Override
         public void setProperties(Configuration configuration) {
+            loadDefaults(configuration);
         }
     };
 
@@ -174,6 +187,7 @@ public class Spatial {
 
         @Override
         public void setProperties(Configuration configuration) {
+            loadDefaults(configuration);
         }
     };
 

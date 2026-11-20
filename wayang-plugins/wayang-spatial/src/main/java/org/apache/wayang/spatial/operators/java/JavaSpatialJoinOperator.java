@@ -135,4 +135,9 @@ public class JavaSpatialJoinOperator<InputType0, InputType1>
         assert index <= this.getNumOutputs() || (index == 0 && this.getNumOutputs() == 0);
         return Collections.singletonList(StreamChannel.DESCRIPTOR);
     }
+
+    @Override
+    public String getLoadProfileEstimatorConfigurationKey() {
+        return "wayang.java.spatialjoin.load";
+    }
 }

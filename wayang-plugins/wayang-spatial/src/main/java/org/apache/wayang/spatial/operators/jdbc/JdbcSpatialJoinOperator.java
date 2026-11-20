@@ -72,4 +72,9 @@ public abstract class JdbcSpatialJoinOperator<InputType0, InputType1>
         return "JOIN " + rightTableName + " ON " +
                 predicate.toSql(leftTableName, leftKey, rightTableName, rightKey);
     }
+
+    @Override
+    public String getLoadProfileEstimatorConfigurationKey() {
+        return String.format("wayang.%s.spatialjoin.load", this.getPlatform().getPlatformId());
+    }
 }

@@ -143,4 +143,9 @@ public class JavaGeoJsonFileSource extends GeoJsonFileSource implements JavaExec
         assert index <= this.getNumOutputs() || (index == 0 && this.getNumOutputs() == 0);
         return Collections.singletonList(StreamChannel.DESCRIPTOR);
     }
+
+    @Override
+    public String getLoadProfileEstimatorConfigurationKey() {
+        return "wayang.java.geojsonfilesource.load";
+    }
 }
