@@ -88,9 +88,9 @@ public class JavaSpatialFilterOperator<Type>
         WayangGeometry wRef = (WayangGeometry) this.referenceGeometry;
         final Geometry reference = wRef.getGeometry();
         final Function<Type, ? extends SpatialGeometry> keyExtractor = javaExecutor.getCompiler().compile(this.keyDescriptor);
-        JtsSpatialPredicate predicate = JtsSpatialPredicate.of(this.predicateType);
+        final Predicate<Geometry> predicate = JtsSpatialPredicate.of(this.predicateType).against(reference);
 
-        return input -> predicate.test(((WayangGeometry) keyExtractor.apply(input)).getGeometry(), reference);
+        return input -> predicate.test(((WayangGeometry) keyExtractor.apply(input)).getGeometry());
     }
 
     @Override

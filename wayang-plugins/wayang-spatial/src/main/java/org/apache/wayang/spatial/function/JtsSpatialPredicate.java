@@ -20,9 +20,12 @@ package org.apache.wayang.spatial.function;
 
 import org.apache.wayang.core.api.spatial.SpatialPredicate;
 import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.prep.PreparedGeometry;
+import org.locationtech.jts.geom.prep.PreparedGeometryFactory;
 
 import java.util.Arrays;
 import java.util.function.BiPredicate;
+import java.util.function.Predicate;
 
 public enum JtsSpatialPredicate {
 
@@ -74,6 +77,31 @@ public enum JtsSpatialPredicate {
 
     public boolean test(Geometry candidate, Geometry reference) {
         return predicate.test(candidate, reference);
+    }
+
+    /**
+     * Fixes the reference geometry of {@link #test(Geometry, Geometry)}, preparing it where JTS can speed up
+     * the predicate (it indexes the reference's edges once instead of per candidate). The result is the same
+     * as calling {@link #test(Geometry, Geometry)} with that reference.
+     *
+     * @param reference the geometry that every candidate is tested against
+     * @return a predicate on candidates
+     */
+    public Predicate<Geometry> against(Geometry reference) {
+        switch (this) {
+            case INTERSECTS: {
+                final PreparedGeometry prepared = PreparedGeometryFactory.prepare(reference);
+                return prepared::intersects;
+            }
+            case WITHIN: {
+                // candidate.within(reference) is defined as reference.contains(candidate).
+                final PreparedGeometry prepared = PreparedGeometryFactory.prepare(reference);
+                return prepared::contains;
+            }
+            default:
+                // JTS does not speed up the remaining predicates on a prepared reference.
+                return candidate -> this.test(candidate, reference);
+        }
     }
 
     public String toSql(String columnExpr, String geomLiteral) {
