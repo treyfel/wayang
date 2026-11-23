@@ -87,7 +87,7 @@ class SpatialLoadProfileTest {
                 cpu(estimate(new JavaSpatialFilterOperator<>(FILTER), in, out)));
         assertEquals(10_000L * 1_000_000 + 56_789,
                 cpu(estimate(new SparkSpatialFilterOperator(FILTER), in, out)));
-        assertEquals(1_500L * 1_000_000 + 380_000,
+        assertEquals(Math.round(1_500 * Math.log(1_000_002) + 15_000d * 10_000 + 380_000),
                 cpu(estimate(new PostgresSpatialFilterOperator<>(FILTER), in, out)));
     }
 
