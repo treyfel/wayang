@@ -31,7 +31,6 @@ import org.apache.wayang.core.plan.wayangplan.ExecutionOperator;
 import org.apache.wayang.core.platform.ChannelDescriptor;
 import org.apache.wayang.core.platform.ChannelInstance;
 import org.apache.wayang.core.platform.lineage.ExecutionLineageNode;
-import org.apache.wayang.core.util.ReflectionUtils;
 import org.apache.wayang.core.util.Tuple;
 import org.apache.wayang.spark.channels.BroadcastChannel;
 import org.apache.wayang.spark.channels.RddChannel;
@@ -85,13 +84,7 @@ public class SparkSpatialFilterOperator<Type>
         assert inputs.length == this.getNumInputs();
         assert outputs.length == this.getNumOutputs();
 
-        // Register Sedona JAR with Spark executors if running in cluster mode.
-        if (!sparkExecutor.sc.isLocal()) {
-            String sedonaJar = ReflectionUtils.getDeclaringJar(SpatialRDD.class);
-            if (sedonaJar != null) {
-                sparkExecutor.sc.addJar(sedonaJar);
-            }
-        }
+        SparkSpatialJars.register(sparkExecutor.sc);
 
         WayangGeometry wRef = (WayangGeometry) this.referenceGeometry;
         final Geometry reference = wRef == null ? null : wRef.getGeometry();

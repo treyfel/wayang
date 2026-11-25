@@ -34,7 +34,6 @@ import org.apache.wayang.core.plan.wayangplan.ExecutionOperator;
 import org.apache.wayang.core.platform.ChannelDescriptor;
 import org.apache.wayang.core.platform.ChannelInstance;
 import org.apache.wayang.core.platform.lineage.ExecutionLineageNode;
-import org.apache.wayang.core.util.ReflectionUtils;
 import org.apache.wayang.core.util.Tuple;
 import org.apache.wayang.spark.channels.RddChannel;
 import org.apache.wayang.spark.execution.SparkExecutor;
@@ -80,13 +79,7 @@ public class SparkSpatialJoinOperator<InputType0, InputType1>
     @Override
     @SuppressWarnings("unchecked")
     public Tuple<Collection<ExecutionLineageNode>, Collection<ChannelInstance>> evaluate(ChannelInstance[] inputs, ChannelInstance[] outputs, SparkExecutor sparkExecutor, OptimizationContext.OperatorContext operatorContext) {
-        // Register Sedona JAR with Spark executors if running in cluster mode.
-        if (!sparkExecutor.sc.isLocal()) {
-            String sedonaJar = ReflectionUtils.getDeclaringJar(SpatialRDD.class);
-            if (sedonaJar != null) {
-                sparkExecutor.sc.addJar(sedonaJar);
-            }
-        }
+        SparkSpatialJars.register(sparkExecutor.sc);
 
         final JavaRDD<InputType0> leftIn = ((RddChannel.Instance) inputs[0]).provideRdd();
         final JavaRDD<InputType1> rightIn = ((RddChannel.Instance) inputs[1]).provideRdd();
