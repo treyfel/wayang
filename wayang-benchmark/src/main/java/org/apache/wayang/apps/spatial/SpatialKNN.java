@@ -29,6 +29,7 @@ import org.apache.wayang.core.api.WayangContext;
 import org.apache.wayang.core.api.spatial.SpatialGeometry;
 import org.apache.wayang.core.plan.wayangplan.OutputSlot;
 import org.apache.wayang.core.plan.wayangplan.WayangPlan;
+import org.apache.wayang.core.platform.Platform;
 import org.apache.wayang.core.types.DataSetType;
 import org.apache.wayang.core.util.ReflectionUtils;
 import org.apache.wayang.java.Java;
@@ -63,27 +64,32 @@ public class SpatialKNN {
                 .withPlugin(Spark.basicPlugin())
                 .withPlugin(Spatial.plugin());
 
+        // Pin source, kNN and count to one platform, so that every run measures the same plan.
+        final Platform target = platform.equals("spark") ? Spark.platform() : Java.platform();
         final TextFileSource source = new TextFileSource(fileUrl);
+        source.addTargetPlatform(target);
         final OutputSlot<String> nearest;
         if (platform.equals("javaindex")) {
             final SpatialIndexOperator<String> index =
                     new SpatialIndexOperator<>(SpatialInput.KEY, DataSetType.createDefault(String.class));
             final SpatialIndexKNNSearchOperator<String> knn =
                     new SpatialIndexKNNSearchOperator<>(k, reference, DataSetType.createDefault(String.class));
-            index.addTargetPlatform(Java.platform());
-            knn.addTargetPlatform(Java.platform());
+            index.addTargetPlatform(target);
+            knn.addTargetPlatform(target);
             source.connectTo(0, index, 0);
             index.connectTo(0, knn, 0);
             nearest = knn.getOutput();
         } else {
             final SpatialKNNSearchOperator<String> knn = new SpatialKNNSearchOperator<>(
                     k, SpatialInput.KEY, DataSetType.createDefault(String.class), reference);
-            knn.addTargetPlatform(platform.equals("spark") ? Spark.platform() : Java.platform());
+            knn.addTargetPlatform(target);
             source.connectTo(0, knn, 0);
             nearest = knn.getOutput();
         }
 
         final CountOperator<String> count = new CountOperator<>(String.class);
+        // The k nearest elements end up in the driver on every platform, so count them there.
+        count.addTargetPlatform(Java.platform());
         nearest.connectTo(count.getInput());
         final Collection<Long> outputcount = new ArrayList<>();
         final LocalCallbackSink<Long> sink = LocalCallbackSink.createCollectingSink(outputcount, Long.class);

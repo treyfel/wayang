@@ -24,6 +24,7 @@ import org.apache.wayang.spark.Spark;
 import org.apache.wayang.core.api.Configuration;
 import org.apache.wayang.core.api.WayangContext;
 import org.apache.wayang.core.api.spatial.SpatialPredicate;
+import org.apache.wayang.core.platform.Platform;
 import org.apache.wayang.java.Java;
 import org.apache.wayang.spatial.Spatial;
 
@@ -52,20 +53,16 @@ public class SpatialFilter {
                 ? SpatialInput.queryGeometry(args[4])
                 : SpatialInput.originBox(selectivity);
 
+        // Pin source, filter and count to one platform, so that every run measures the same plan.
+        final Platform target = platform.equals("spark") ? Spark.platform() : Java.platform();
         Collection<Long> outputcount =
-                planBuilder.readTextFile(fileUrl)
+                planBuilder.readTextFile(fileUrl).withTargetPlatform(target)
                         .spatialFilter(
                                 SpatialInput.KEY,
                                 SpatialPredicate.INTERSECTS,
                                 queryGeometry
-                        ).withTargetPlatform(
-                                switch (platform) {
-                                    case "java"  -> Java.platform();
-                                    case "spark" -> Spark.platform();
-                                    default -> Java.platform();
-                                }
-                        )
-                        .count()
+                        ).withTargetPlatform(target)
+                        .count().withTargetPlatform(target)
                         .collect();
 
         System.out.println("Spatial Filter Result Size: " + outputcount);

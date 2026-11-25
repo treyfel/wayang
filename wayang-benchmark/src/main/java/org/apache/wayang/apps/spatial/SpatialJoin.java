@@ -18,12 +18,11 @@
 
 package org.apache.wayang.apps.spatial;
 
-import org.apache.wayang.api.DataQuantaBuilder;
 import org.apache.wayang.api.JavaPlanBuilder;
-import org.apache.wayang.api.UnarySourceDataQuantaBuilder;
 import org.apache.wayang.core.api.Configuration;
 import org.apache.wayang.core.api.WayangContext;
 import org.apache.wayang.core.api.spatial.SpatialPredicate;
+import org.apache.wayang.core.platform.Platform;
 import org.apache.wayang.java.Java;
 import org.apache.wayang.spark.Spark;
 import org.apache.wayang.spatial.Spatial;
@@ -46,8 +45,10 @@ public class SpatialJoin {
         String file1Url = args[1];
         String file2Url = args[2];
         String platform = args[3];
-        DataQuantaBuilder<UnarySourceDataQuantaBuilder<?, String>, String> table1 = planBuilder.readTextFile(file1Url);
-        DataQuantaBuilder<UnarySourceDataQuantaBuilder<?, String>, String> table2 = planBuilder.readTextFile(file2Url);
+        // Pin sources, join and count to one platform, so that every run measures the same plan.
+        final Platform target = platform.equals("spark") ? Spark.platform() : Java.platform();
+        var table1 = planBuilder.readTextFile(file1Url).withTargetPlatform(target);
+        var table2 = planBuilder.readTextFile(file2Url).withTargetPlatform(target);
 
         Collection<Long> outputcount = table1
                 .spatialJoin(
@@ -55,13 +56,8 @@ public class SpatialJoin {
                         table2,
                         SpatialInput.KEY,
                         SpatialPredicate.INTERSECTS
-                ).withTargetPlatform(
-                        switch (platform) {
-                            case "java"  -> Java.platform();
-                            case "spark" -> Spark.platform();
-                            default -> Java.platform();
-                        })
-                .count()
+                ).withTargetPlatform(target)
+                .count().withTargetPlatform(target)
                 .collect();
         System.out.println("Spatial Join Result Size: " + outputcount);
     }
