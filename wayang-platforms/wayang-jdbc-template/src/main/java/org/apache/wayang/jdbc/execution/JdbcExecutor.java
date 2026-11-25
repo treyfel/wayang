@@ -482,6 +482,13 @@ public class JdbcExecutor extends ExecutorTemplate {
             final String query = pair.field0;
             final SqlQueryChannel.Instance queryChannel = pair.field1;
             queryChannel.setSqlQuery(query);
+            if (this.isProfilingEnabled()) {
+                // The query runs later in the consumer (e.g., SqlToStreamOperator), which
+                // collects these nodes, so the measured time is attributed to the JDBC operators too.
+                for (ExecutionLineageNode node : this.createExecutionLineageNodes(stage, optimizationContext)) {
+                    queryChannel.getLineage().addPredecessor(node);
+                }
+            }
             executionState.register(queryChannel);
         }
     }

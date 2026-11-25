@@ -25,7 +25,9 @@ import org.apache.wayang.core.function.PredicateDescriptor;
 import org.apache.wayang.core.optimizer.DefaultOptimizationContext;
 import org.apache.wayang.core.plan.executionplan.ExecutionStage;
 import org.apache.wayang.core.plan.executionplan.ExecutionTask;
+import org.apache.wayang.core.platform.AtomicExecution;
 import org.apache.wayang.core.platform.CrossPlatformExecutor;
+import org.apache.wayang.core.platform.lineage.ExecutionLineageNode;
 import org.apache.wayang.core.profiling.NoInstrumentationStrategy;
 import org.apache.wayang.jdbc.channels.SqlQueryChannel;
 import org.apache.wayang.jdbc.operators.JdbcFilterOperator;
@@ -39,8 +41,11 @@ import org.apache.wayang.jdbc.test.HsqldbTableSource;
 import org.junit.jupiter.api.Test;
 
 import java.sql.SQLException;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.mock;
@@ -302,5 +307,87 @@ class JdbcExecutorTest {
         } finally {
             executor.dispose();
         }
+    }
+
+    @Test
+    void testQueryChannelCarriesOperatorLineageWhenLogging() {
+        assertEquals(
+                new HashSet<>(Arrays.asList("wayang.hsqldb.tablesource.load", "wayang.hsqldb.filter.load")),
+                this.lineageKeysOfFilterStage(true)
+        );
+    }
+
+    @Test
+    void testQueryChannelCarriesNoOperatorLineageWithoutLogging() {
+        assertEquals(Collections.emptySet(), this.lineageKeysOfFilterStage(false));
+    }
+
+    /**
+     * Executes a table source and filter stage and collects the load profile keys that the consumer
+     * of its query channel would attribute its measured time to.
+     */
+    private Set<String> lineageKeysOfFilterStage(boolean isLogging) {
+        Configuration configuration = new Configuration();
+        configuration.setProperty("wayang.core.log.enabled", String.valueOf(isLogging));
+        configuration.setProperty("wayang.hsqldb.cpu.mhz", "2700");
+        configuration.setProperty("wayang.hsqldb.cores", "1");
+        configuration.setProperty("wayang.hsqldb.tablesource.load",
+                "{\"in\":0,\"out\":1,\"cpu\":\"${1}\",\"ram\":\"0\",\"p\":1.0}");
+        configuration.setProperty("wayang.hsqldb.filter.load",
+                "{\"in\":1,\"out\":1,\"cpu\":\"${1}\",\"ram\":\"0\",\"p\":1.0}");
+        Job job = mock(Job.class);
+        when(job.getConfiguration()).thenReturn(configuration);
+        when(job.getCrossPlatformExecutor()).thenReturn(new CrossPlatformExecutor(job, new NoInstrumentationStrategy()));
+        SqlQueryChannel.Descriptor sqlChannelDescriptor = HsqldbPlatform.getInstance().getSqlQueryChannelDescriptor();
+
+        ExecutionStage sqlStage = mock(ExecutionStage.class);
+
+        JdbcTableSource tableSource = new HsqldbTableSource("customer");
+        ExecutionTask tableSourceTask = new ExecutionTask(tableSource);
+        tableSourceTask.setOutputChannel(0, new SqlQueryChannel(sqlChannelDescriptor, tableSource.getOutput(0)));
+        tableSourceTask.setStage(sqlStage);
+
+        JdbcFilterOperator filterOperator = new HsqldbFilterOperator(
+                new PredicateDescriptor<>(
+                        (PredicateDescriptor.SerializablePredicate<Record>) record -> {
+                            throw new UnsupportedOperationException();
+                        },
+                        Record.class
+                ).withSqlImplementation("age >= 18")
+        );
+        ExecutionTask filterTask = new ExecutionTask(filterOperator);
+        filterTask.setStage(sqlStage);
+        tableSourceTask.getOutputChannel(0).addConsumer(filterTask, 0);
+        filterTask.setOutputChannel(0, new SqlQueryChannel(sqlChannelDescriptor, filterOperator.getOutput(0)));
+
+        when(sqlStage.getStartTasks()).thenReturn(Collections.singleton(tableSourceTask));
+        when(sqlStage.getTerminalTasks()).thenReturn(Collections.singleton(filterTask));
+        when(sqlStage.getAllTasks()).thenReturn(new HashSet<>(Arrays.asList(tableSourceTask, filterTask)));
+
+        SqlToStreamOperator sqlToStreamOperator = new SqlToStreamOperator(HsqldbPlatform.getInstance());
+        ExecutionTask sqlToStreamTask = new ExecutionTask(sqlToStreamOperator);
+        filterTask.getOutputChannel(0).addConsumer(sqlToStreamTask, 0);
+        sqlToStreamTask.setStage(mock(ExecutionStage.class));
+
+        DefaultOptimizationContext optimizationContext = new DefaultOptimizationContext(job);
+        optimizationContext.addOneTimeOperator(tableSource);
+        optimizationContext.addOneTimeOperator(filterOperator);
+        JdbcExecutor executor = new JdbcExecutor(HsqldbPlatform.getInstance(), job);
+        try {
+            executor.execute(sqlStage, optimizationContext, job.getCrossPlatformExecutor());
+        } finally {
+            executor.dispose();
+        }
+
+        // Nothing is measured yet: the query runs only when the consumer reads the channel.
+        assertEquals(0, job.getCrossPlatformExecutor().getPartialExecutions().size());
+        SqlQueryChannel.Instance queryChannel = (SqlQueryChannel.Instance)
+                job.getCrossPlatformExecutor().getChannelInstance(sqlToStreamTask.getInputChannel(0));
+        return queryChannel.getLineage().collectAndMark().getField0().stream()
+                .map(ExecutionLineageNode::getAtomicExecutions)
+                .flatMap(executions -> executions.stream())
+                .map(AtomicExecution::getLoadProfileEstimator)
+                .map(estimator -> estimator.getConfigurationKey())
+                .collect(Collectors.toSet());
     }
 }
