@@ -156,4 +156,8 @@ public class JavaSpatialKNNSearchOperator<Type>
         return Collections.singletonList(CollectionChannel.DESCRIPTOR);
     }
 
+    @Override
+    public String getLoadProfileEstimatorConfigurationKey() {
+        return "wayang.java.spatialknnsearch.load";
+    }
 }

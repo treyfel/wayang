@@ -74,4 +74,9 @@ public abstract class JdbcSpatialKNNSearchOperator<Type> extends SpatialKNNSearc
 
         return String.format(" ORDER BY %s <-> %s LIMIT %d", columnExpr, geomLiteral, this.k);
     }
+
+    @Override
+    public String getLoadProfileEstimatorConfigurationKey() {
+        return String.format("wayang.%s.spatialknnsearch.load", this.getPlatform().getPlatformId());
+    }
 }

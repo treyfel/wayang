@@ -29,14 +29,20 @@ import org.apache.wayang.core.optimizer.costs.LoadProfileEstimator;
 import org.apache.wayang.core.optimizer.costs.SimpleEstimationContext;
 import org.apache.wayang.core.plan.wayangplan.ExecutionOperator;
 import org.apache.wayang.core.types.DataSetType;
+import org.apache.wayang.spatial.data.WayangGeometry;
 import org.apache.wayang.spatial.operators.java.JavaGeoJsonFileSink;
 import org.apache.wayang.spatial.operators.java.JavaGeoJsonFileSource;
 import org.apache.wayang.spatial.operators.java.JavaSpatialFilterOperator;
+import org.apache.wayang.spatial.operators.java.JavaSpatialIndexKNNSearchOperator;
+import org.apache.wayang.spatial.operators.java.JavaSpatialIndexOperator;
 import org.apache.wayang.spatial.operators.java.JavaSpatialJoinOperator;
+import org.apache.wayang.spatial.operators.java.JavaSpatialKNNSearchOperator;
 import org.apache.wayang.spatial.operators.postgres.PostgresSpatialFilterOperator;
 import org.apache.wayang.spatial.operators.postgres.PostgresSpatialJoinOperator;
+import org.apache.wayang.spatial.operators.postgres.PostgresSpatialKNNSearchOperator;
 import org.apache.wayang.spatial.operators.spark.SparkSpatialFilterOperator;
 import org.apache.wayang.spatial.operators.spark.SparkSpatialJoinOperator;
+import org.apache.wayang.spatial.operators.spark.SparkSpatialKNNSearchOperator;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -121,5 +127,31 @@ class SpatialLoadProfileTest {
         final LoadProfile sink = estimate(new JavaGeoJsonFileSink("file:///dev/null"), new long[]{500}, new long[0]);
         assertEquals(10_000L * 500 + 810_000, cpu(sink));
         assertEquals(500L * 500, sink.getDiskUsage().getLowerEstimate());
+    }
+
+    @Test
+    void knnSearchesHaveLoadProfiles() {
+        final SpatialGeometry reference = WayangGeometry.fromStringInput("POINT (0 0)");
+        final DataSetType<SpatialGeometry> type = DataSetType.createDefault(SpatialGeometry.class);
+        final long[] in = {1_000_000}, out = {10};
+        final double lnIn = Math.log(1_000_002);
+
+        assertEquals(Math.round(5_000d * 1_000_000 + 20_000 * 10 * lnIn + 500_000),
+                cpu(estimate(new JavaSpatialKNNSearchOperator<>(10, g -> g, type, reference), in, out)));
+        final LoadProfile spark = estimate(new SparkSpatialKNNSearchOperator<>(10, g -> g, type, reference), in, out);
+        assertEquals(Math.round(3_000d * 1_000_000 * lnIn + 20_000d * 10 + 2_000_000), cpu(spark));
+        assertEquals(1_000L * 10 + 10_000, spark.getNetworkUsage().getLowerEstimate());
+        assertEquals(Math.round(1_500 * lnIn + 15_000d * 10 + 380_000),
+                cpu(estimate(new PostgresSpatialKNNSearchOperator<>(10, g -> g, type, reference), in, out)));
+    }
+
+    @Test
+    void spatialIndexAndIndexedKnnSearchHaveLoadProfiles() {
+        final DataSetType<SpatialGeometry> type = DataSetType.createDefault(SpatialGeometry.class);
+        assertEquals(Math.round(3_000d * 1_000_000 * Math.log(1_000_002) + 500_000),
+                cpu(estimate(new JavaSpatialIndexOperator<>(g -> g, type), new long[]{1_000_000}, new long[]{1})));
+        assertEquals(Math.round(100_000d * 1 + 20_000 * 10 * Math.log(12) + 100_000),
+                cpu(estimate(new JavaSpatialIndexKNNSearchOperator<>(10, WayangGeometry.fromStringInput("POINT (0 0)"), type),
+                        new long[]{1}, new long[]{10})));
     }
 }
