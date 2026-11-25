@@ -27,7 +27,6 @@ import org.apache.wayang.core.api.spatial.SpatialPredicate;
 import org.apache.wayang.java.Java;
 import org.apache.wayang.spark.Spark;
 import org.apache.wayang.spatial.Spatial;
-import org.apache.wayang.spatial.data.WayangGeometry;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -42,7 +41,7 @@ public class SpatialJoin {
                 .withPlugin(Spark.basicPlugin())
                 .withPlugin(Spatial.plugin());
 
-        JavaPlanBuilder planBuilder = new JavaPlanBuilder(wayangContext);
+        JavaPlanBuilder planBuilder = new JavaPlanBuilder(wayangContext).withUdfJarOf(SpatialJoin.class);
 
         String file1Url = args[1];
         String file2Url = args[2];
@@ -52,9 +51,9 @@ public class SpatialJoin {
 
         Collection<Long> outputcount = table1
                 .spatialJoin(
-                        WayangGeometry::fromStringInput,
+                        SpatialInput::parse,
                         table2,
-                        WayangGeometry::fromStringInput,
+                        SpatialInput::parse,
                         SpatialPredicate.INTERSECTS
                 ).withTargetPlatform(
                         switch (platform) {

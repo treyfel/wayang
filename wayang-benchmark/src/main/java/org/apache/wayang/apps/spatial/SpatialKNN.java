@@ -46,13 +46,9 @@ import java.util.Collection;
  * Args: {@code <ignored> <file-url> <java|spark|javaindex> <k> [reference WKT, default POINT (0.5 0.5)]}.
  * {@code javaindex} builds a {@link SpatialIndexOperator} and queries it with a
  * {@link SpatialIndexKNNSearchOperator}; the others run a {@link SpatialKNNSearchOperator}.
- * Lines are WKT, optionally as the quoted first CSV field ({@code "WKT",id,...}).
+ * Lines are parsed by {@link SpatialInput}.
  */
 public class SpatialKNN {
-
-    private static SpatialGeometry parse(String line) {
-        return WayangGeometry.fromStringInput(line.split("\",")[0].replace("\"", ""));
-    }
 
     public static void main(String[] args) {
         System.out.println("Running Spatial KNN Benchmark with args " + Arrays.toString(args));
@@ -71,7 +67,7 @@ public class SpatialKNN {
         final OutputSlot<String> nearest;
         if (platform.equals("javaindex")) {
             final SpatialIndexOperator<String> index =
-                    new SpatialIndexOperator<>(SpatialKNN::parse, DataSetType.createDefault(String.class));
+                    new SpatialIndexOperator<>(SpatialInput::parse, DataSetType.createDefault(String.class));
             final SpatialIndexKNNSearchOperator<String> knn =
                     new SpatialIndexKNNSearchOperator<>(k, reference, DataSetType.createDefault(String.class));
             index.addTargetPlatform(Java.platform());
@@ -81,7 +77,7 @@ public class SpatialKNN {
             nearest = knn.getOutput();
         } else {
             final SpatialKNNSearchOperator<String> knn = new SpatialKNNSearchOperator<>(
-                    k, SpatialKNN::parse, DataSetType.createDefault(String.class), reference);
+                    k, SpatialInput::parse, DataSetType.createDefault(String.class), reference);
             knn.addTargetPlatform(platform.equals("spark") ? Spark.platform() : Java.platform());
             source.connectTo(0, knn, 0);
             nearest = knn.getOutput();

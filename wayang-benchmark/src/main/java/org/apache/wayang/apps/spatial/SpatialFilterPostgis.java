@@ -54,9 +54,10 @@ public class SpatialFilterPostgis {
 
         JavaPlanBuilder builder = new JavaPlanBuilder(wayangContext);
 
-        SpatialGeometry queryGeometry = WayangGeometry.fromStringInput(
-                "POLYGON((0.0 0.0, " + selectivity + " 0.0, " + selectivity + " " + selectivity + ", 0.0 " + selectivity + ", 0.0 0.0))"
-        );
+        // The optional last argument replaces the (0,0)-(s,s) box with a query geometry (inline or @file).
+        SpatialGeometry queryGeometry = args.length > 5
+                ? SpatialInput.queryGeometry(args[5])
+                : SpatialInput.originBox(selectivity);
 
         final Collection<Long> outputcount = builder
                 .readTable(new PostgresTableSource(tableName, "ST_AsText(geom)"))
