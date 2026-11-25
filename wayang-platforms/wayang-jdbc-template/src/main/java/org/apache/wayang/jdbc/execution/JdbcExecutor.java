@@ -33,6 +33,7 @@ import org.apache.wayang.basic.operators.FilterOperator;
 import org.apache.wayang.basic.operators.JoinOperator;
 import org.apache.wayang.basic.operators.SpatialFilterOperator;
 import org.apache.wayang.basic.operators.SpatialJoinOperator;
+import org.apache.wayang.basic.operators.SpatialKNNSearchOperator;
 import org.apache.wayang.core.api.Configuration;
 import org.apache.wayang.core.api.Job;
 import org.apache.wayang.core.api.exception.WayangException;
@@ -74,6 +75,23 @@ public class JdbcExecutor extends ExecutorTemplate {
     public static StringBuilder createSqlString(final JdbcExecutor jdbcExecutor, final JdbcSourceOperator sourceOp,
             final Collection<JdbcExecutionOperator> filterTasks, final JdbcProjectionOperator projectionTask, final JdbcGlobalReduceOperator globalReduceTask, final JdbcReduceByOperator reduceByTask, final JdbcSortOperator sortTask,
             final Collection<JdbcExecutionOperator> joinTasks, final Configuration configuration) {
+        return createSqlString(jdbcExecutor, sourceOp, filterTasks, projectionTask, globalReduceTask, reduceByTask,
+                sortTask, null, joinTasks, configuration);
+    }
+
+    /**
+     * Like {@link #createSqlString(JdbcExecutor, JdbcSourceOperator, Collection, JdbcProjectionOperator,
+     * JdbcGlobalReduceOperator, JdbcReduceByOperator, JdbcSortOperator, Collection, Configuration)}, plus an
+     * optional spatial kNN search, which contributes {@code ORDER BY ... LIMIT k} and so excludes a sort.
+     */
+    public static StringBuilder createSqlString(final JdbcExecutor jdbcExecutor, final JdbcSourceOperator sourceOp,
+            final Collection<JdbcExecutionOperator> filterTasks, final JdbcProjectionOperator projectionTask,
+            final JdbcGlobalReduceOperator globalReduceTask, final JdbcReduceByOperator reduceByTask,
+            final JdbcSortOperator sortTask, final JdbcExecutionOperator knnTask,
+            final Collection<JdbcExecutionOperator> joinTasks, final Configuration configuration) {
+        if (knnTask != null && sortTask != null) {
+            throw new WayangException("A JDBC stage cannot hold both a sort and a spatial kNN search.");
+        }
         final String sourceName = sourceOp.createSqlClause(
                 jdbcExecutor.connection,
                 jdbcExecutor.functionCompiler,
@@ -131,6 +149,9 @@ public class JdbcExecutor extends ExecutorTemplate {
                 configuration
             ));
         }
+        if (knnTask != null) {
+            sb.append(knnTask.createSqlClause(jdbcExecutor.connection, jdbcExecutor.functionCompiler, configuration));
+        }
 
         // Intentionally no trailing ';'. A trailing semicolon is unnecessary for a
         // single-statement JDBC executeQuery and is rejected by strict SQL parsers
@@ -164,6 +185,7 @@ public class JdbcExecutor extends ExecutorTemplate {
         JdbcGlobalReduceOperator globalReduceTask = null;
         JdbcReduceByOperator reduceByTask = null;
         JdbcSortOperator sortTask = null;
+        JdbcExecutionOperator knnTask = null;
         final Collection<JdbcExecutionOperator> joinTasks = new ArrayList<>();
         final Set<ExecutionTask> allTasks = stage.getAllTasks();
         assert allTasks.size() <= 3;
@@ -171,7 +193,15 @@ public class JdbcExecutor extends ExecutorTemplate {
         while (nextTask != null) {
             // Evaluate the nextTask.
             final ExecutionOperator operator = nextTask.getOperator();
-            if (operator instanceof FilterOperator || operator instanceof SpatialFilterOperator) {
+            // ORDER BY ... LIMIT k is applied after WHERE, joins, GROUP BY and aggregates, so only a
+            // projection may follow the kNN search in the same statement.
+            if (knnTask != null && !(operator instanceof JdbcProjectionOperator)) {
+                throw new WayangException(String.format(
+                        "Cannot run %s after a spatial kNN search in one SQL statement.", nextTask));
+            }
+            if (operator instanceof SpatialKNNSearchOperator) {
+                knnTask = (JdbcExecutionOperator) operator;
+            } else if (operator instanceof FilterOperator || operator instanceof SpatialFilterOperator) {
                 filterTasks.add((JdbcExecutionOperator) operator);
             } else if (operator instanceof JdbcProjectionOperator) {
                 assert projectionTask == null; // Allow one projection operator per stage for now.
@@ -201,7 +231,7 @@ public class JdbcExecutor extends ExecutorTemplate {
 
         // Create the SQL query.
         final StringBuilder query = createSqlString(jdbcExecutor, sourceOp, filterTasks, projectionTask,
-                globalReduceTask, reduceByTask, sortTask, joinTasks, context.getConfiguration());
+                globalReduceTask, reduceByTask, sortTask, knnTask, joinTasks, context.getConfiguration());
         
         return new Tuple2<>(query.toString(), tipChannelInstance);
     }

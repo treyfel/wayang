@@ -21,10 +21,13 @@ package org.apache.wayang.jdbc.execution;
 import org.apache.wayang.basic.data.Record;
 import org.apache.wayang.core.api.Configuration;
 import org.apache.wayang.core.api.Job;
+import org.apache.wayang.core.api.exception.WayangException;
+import org.apache.wayang.core.api.spatial.SpatialGeometry;
 import org.apache.wayang.core.function.PredicateDescriptor;
 import org.apache.wayang.core.optimizer.DefaultOptimizationContext;
 import org.apache.wayang.core.plan.executionplan.ExecutionStage;
 import org.apache.wayang.core.plan.executionplan.ExecutionTask;
+import org.apache.wayang.core.plan.wayangplan.ExecutionOperator;
 import org.apache.wayang.core.platform.AtomicExecution;
 import org.apache.wayang.core.platform.CrossPlatformExecutor;
 import org.apache.wayang.core.platform.lineage.ExecutionLineageNode;
@@ -37,6 +40,7 @@ import org.apache.wayang.jdbc.operators.SqlToStreamOperator;
 import org.apache.wayang.jdbc.test.HsqldbFilterOperator;
 import org.apache.wayang.jdbc.test.HsqldbPlatform;
 import org.apache.wayang.jdbc.test.HsqldbProjectionOperator;
+import org.apache.wayang.jdbc.test.HsqldbSpatialKNNSearchOperator;
 import org.apache.wayang.jdbc.test.HsqldbTableSource;
 import org.junit.jupiter.api.Test;
 
@@ -44,10 +48,12 @@ import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -389,5 +395,75 @@ class JdbcExecutorTest {
                 .map(AtomicExecution::getLoadProfileEstimator)
                 .map(estimator -> estimator.getConfigurationKey())
                 .collect(Collectors.toSet());
+    }
+
+    @Test
+    void testExecuteWithFilterAndKnnSearch() {
+        assertEquals(
+                "SELECT * FROM customer WHERE age >= 18 ORDER BY age LIMIT 3",
+                this.composeQuery(Arrays.asList(adultFilter(), knnSearch()))
+        );
+    }
+
+    @Test
+    void testRefusesFilterAfterKnnSearch() {
+        // SQL would filter before limiting to the k nearest, which is not what the plan asks for.
+        assertThrows(WayangException.class, () -> this.composeQuery(Arrays.asList(knnSearch(), adultFilter())));
+    }
+
+    private static JdbcFilterOperator adultFilter() {
+        return new HsqldbFilterOperator(
+                new PredicateDescriptor<>(
+                        (PredicateDescriptor.SerializablePredicate<Record>) record -> {
+                            throw new UnsupportedOperationException();
+                        },
+                        Record.class
+                ).withSqlImplementation("age >= 18")
+        );
+    }
+
+    private static HsqldbSpatialKNNSearchOperator knnSearch() {
+        return new HsqldbSpatialKNNSearchOperator(3, "age", mock(SpatialGeometry.class));
+    }
+
+    /**
+     * Executes a stage of a table source followed by the given operators and returns the composed query.
+     */
+    private String composeQuery(List<ExecutionOperator> operators) {
+        Configuration configuration = new Configuration();
+        Job job = mock(Job.class);
+        when(job.getConfiguration()).thenReturn(configuration);
+        when(job.getCrossPlatformExecutor()).thenReturn(new CrossPlatformExecutor(job, new NoInstrumentationStrategy()));
+        SqlQueryChannel.Descriptor sqlChannelDescriptor = HsqldbPlatform.getInstance().getSqlQueryChannelDescriptor();
+        ExecutionStage sqlStage = mock(ExecutionStage.class);
+
+        JdbcTableSource tableSource = new HsqldbTableSource("customer");
+        ExecutionTask tableSourceTask = new ExecutionTask(tableSource);
+        tableSourceTask.setOutputChannel(0, new SqlQueryChannel(sqlChannelDescriptor, tableSource.getOutput(0)));
+        tableSourceTask.setStage(sqlStage);
+
+        ExecutionTask tipTask = tableSourceTask;
+        for (ExecutionOperator operator : operators) {
+            ExecutionTask task = new ExecutionTask(operator);
+            task.setStage(sqlStage);
+            tipTask.getOutputChannel(0).addConsumer(task, 0);
+            task.setOutputChannel(0, new SqlQueryChannel(sqlChannelDescriptor, operator.getOutput(0)));
+            tipTask = task;
+        }
+        when(sqlStage.getStartTasks()).thenReturn(Collections.singleton(tableSourceTask));
+        when(sqlStage.getTerminalTasks()).thenReturn(Collections.singleton(tipTask));
+
+        ExecutionTask sqlToStreamTask = new ExecutionTask(new SqlToStreamOperator(HsqldbPlatform.getInstance()));
+        tipTask.getOutputChannel(0).addConsumer(sqlToStreamTask, 0);
+        sqlToStreamTask.setStage(mock(ExecutionStage.class));
+
+        JdbcExecutor executor = new JdbcExecutor(HsqldbPlatform.getInstance(), job);
+        try {
+            executor.execute(sqlStage, new DefaultOptimizationContext(job), job.getCrossPlatformExecutor());
+        } finally {
+            executor.dispose();
+        }
+        return ((SqlQueryChannel.Instance) job.getCrossPlatformExecutor()
+                .getChannelInstance(sqlToStreamTask.getInputChannel(0))).getSqlQuery();
     }
 }
