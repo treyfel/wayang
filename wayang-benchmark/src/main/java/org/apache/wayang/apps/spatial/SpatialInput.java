@@ -19,6 +19,7 @@
 package org.apache.wayang.apps.spatial;
 
 import org.apache.wayang.core.api.exception.WayangException;
+import org.apache.wayang.core.function.FunctionDescriptor;
 import org.apache.wayang.spatial.data.WayangGeometry;
 
 import java.io.IOException;
@@ -30,6 +31,13 @@ import java.nio.file.Path;
  * ({@code "WKT",id,[tags]}, where POINT rows come without quotes).
  */
 final class SpatialInput {
+
+    /**
+     * {@link #parse} as a serializable key extractor for the spatial operators. Use this instead of a lambda in
+     * an app: Spark executors deserialize a lambda through the class that defines it, and the apps reference the
+     * Java platform, which executors do not have (NoClassDefFoundError: JavaPlatform). This class does not.
+     */
+    static final FunctionDescriptor.SerializableFunction<String, WayangGeometry> KEY = SpatialInput::parse;
 
     private SpatialInput() {
     }

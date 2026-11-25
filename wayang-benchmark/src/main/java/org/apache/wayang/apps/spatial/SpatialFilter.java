@@ -21,7 +21,6 @@ package org.apache.wayang.apps.spatial;
 import org.apache.wayang.api.JavaPlanBuilder;
 import org.apache.wayang.core.api.spatial.SpatialGeometry;
 import org.apache.wayang.spark.Spark;
-import org.apache.wayang.spatial.data.WayangGeometry;
 import org.apache.wayang.core.api.Configuration;
 import org.apache.wayang.core.api.WayangContext;
 import org.apache.wayang.core.api.spatial.SpatialPredicate;
@@ -56,7 +55,7 @@ public class SpatialFilter {
         Collection<Long> outputcount =
                 planBuilder.readTextFile(fileUrl)
                         .spatialFilter(
-                                (input -> WayangGeometry.fromStringInput((input.split("\",")[0]).replace("\"", ""))),
+                                SpatialInput.KEY,
                                 SpatialPredicate.INTERSECTS,
                                 queryGeometry
                         ).withTargetPlatform(

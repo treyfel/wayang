@@ -51,9 +51,9 @@ public class SpatialJoin {
 
         Collection<Long> outputcount = table1
                 .spatialJoin(
-                        SpatialInput::parse,
+                        SpatialInput.KEY,
                         table2,
-                        SpatialInput::parse,
+                        SpatialInput.KEY,
                         SpatialPredicate.INTERSECTS
                 ).withTargetPlatform(
                         switch (platform) {

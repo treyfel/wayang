@@ -67,7 +67,7 @@ public class SpatialKNN {
         final OutputSlot<String> nearest;
         if (platform.equals("javaindex")) {
             final SpatialIndexOperator<String> index =
-                    new SpatialIndexOperator<>(SpatialInput::parse, DataSetType.createDefault(String.class));
+                    new SpatialIndexOperator<>(SpatialInput.KEY, DataSetType.createDefault(String.class));
             final SpatialIndexKNNSearchOperator<String> knn =
                     new SpatialIndexKNNSearchOperator<>(k, reference, DataSetType.createDefault(String.class));
             index.addTargetPlatform(Java.platform());
@@ -77,7 +77,7 @@ public class SpatialKNN {
             nearest = knn.getOutput();
         } else {
             final SpatialKNNSearchOperator<String> knn = new SpatialKNNSearchOperator<>(
-                    k, SpatialInput::parse, DataSetType.createDefault(String.class), reference);
+                    k, SpatialInput.KEY, DataSetType.createDefault(String.class), reference);
             knn.addTargetPlatform(platform.equals("spark") ? Spark.platform() : Java.platform());
             source.connectTo(0, knn, 0);
             nearest = knn.getOutput();
