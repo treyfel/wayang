@@ -68,8 +68,11 @@ public class ReadCount {
 
         final WayangContext wayangContext = new WayangContext(configuration)
                 .withPlugin(Java.basicPlugin())
-                .withPlugin(Spark.basicPlugin())
                 .withPlugin(Postgres.plugin());
+        // Only offer Spark for Spark runs, so that a Postgres read is not routed through Spark (SqlToRdd).
+        if (platform.equals("spark")) {
+            wayangContext.withPlugin(Spark.basicPlugin());
+        }
 
         final CountOperator<?> count = platform.equals("postgres")
                 ? new CountOperator<>(Record.class)

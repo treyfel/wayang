@@ -58,8 +58,12 @@ public class SpatialJoinPostgis {
         WayangContext wayangContext = new WayangContext(configuration)
                 .withPlugin(Java.basicPlugin())
                 .withPlugin(Postgres.plugin())
-                .withPlugin(Spark.basicPlugin())
                 .withPlugin(Spatial.plugin());
+        // Only offer Spark when it is asked for: otherwise the optimizer may move the result of a Postgres join
+        // into Spark via SqlToRdd, which fails on the two geom columns of the joined tables.
+        if (platform.equals("spark")) {
+            wayangContext.withPlugin(Spark.basicPlugin());
+        }
 
         TableSource table1 = new PostgresTableSource(tableName1,  "ST_AsText(geom)");
         TableSource table2 = new PostgresTableSource(tableName2,  "ST_AsText(geom)");
